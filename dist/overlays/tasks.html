@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tasks Overlay</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}
+.tk-panel{position:fixed;box-sizing:border-box;transition:background .2s,color .2s,border-color .2s}
+</style>
+</head>
+<body>
+<div id="hostPanel" class="tk-panel"></div>
+<div id="viewerPanel" class="tk-panel" style="display:none"></div>
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+
+const hostPanel = document.getElementById('hostPanel');
+const viewerPanel = document.getElementById('viewerPanel');
+
+function defaultBox(headerColor, posMode){
+  return {
+    bg:'#140e28', bgOpacity:88,
+    textColor:'#f5f1ff', headerColor,
+    borderColor:'#ffffff', borderWidth:1,
+    shape:'rounded', borderRadius:14,
+    fontSize:15, headerSize:11,
+    width:320, padding:14,
+    position:{ mode:posMode, x:20, y:20 },
+  };
+}
+
+let tasks = [];
+let cfg = {
+  hostBox:   defaultBox('#ffc83d', 'top-left'),
+  viewerBox: defaultBox('#b8aee0', 'top-right'),
+  overlay: {
+    font:'', rowSpacing:3, completedStyle:'strikethrough',
+    separateBoxes:false,
+    position:{ mode:'top-left', x:20, y:20 },
+  },
+};
+let hostDisplay = 'Host';
+
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function deepMerge(target, source){
+  if(!source) return target;
+  for(const k in source){
+    const sv = source[k];
+    if(sv && typeof sv==='object' && !Array.isArray(sv) && target[k] && typeof target[k]==='object'){
+      deepMerge(target[k], sv);
+    } else {
+      target[k] = sv;
+    }
+  }
+  return target;
+}
+
+function loadFont(font){
+  if(!font) return;
+  const id='gf-'+font.replace(/\s/g,'-');
+  if(document.getElementById(id)) return;
+  const l=document.createElement('link');
+  l.id=id; l.rel='stylesheet';
+  l.href=`https://fonts.googleapis.com/css2?family=${encodeURIComponent(font)}&display=swap`;
+  document.head.appendChild(l);
+}
+
+function hexToRgba(hex, opacityPct){
+  hex = (hex||'#000000').replace('#','');
+  if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+  const r=parseInt(hex.slice(0,2),16)||0, g=parseInt(hex.slice(2,4),16)||0, b=parseInt(hex.slice(4,6),16)||0;
+  const a = (opacityPct==null?100:opacityPct)/100;
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+function radiusFor(box){
+  if(box.shape==='pill') return '999px';
+  if(box.shape==='square') return '0px';
+  if(box.shape==='custom') return (box.borderRadius||0)+'px';
+  return '14px'; // rounded
+}
+
+function applyPosition(elm, pos){
+  elm.style.top=elm.style.right=elm.style.bottom=elm.style.left='auto';
+  if(pos.mode==='top-left'){ elm.style.top='20px'; elm.style.left='20px'; }
+  else if(pos.mode==='top-right'){ elm.style.top='20px'; elm.style.right='20px'; }
+  else if(pos.mode==='bottom-left'){ elm.style.bottom='20px'; elm.style.left='20px'; }
+  else if(pos.mode==='bottom-right'){ elm.style.bottom='20px'; elm.style.right='20px'; }
+  else if(pos.mode==='custom'){ elm.style.top=(pos.y||0)+'px'; elm.style.left=(pos.x||0)+'px'; }
+}
+
+function styleContainer(elm, box){
+  elm.style.background = hexToRgba(box.bg, box.bgOpacity);
+  elm.style.color = box.textColor;
+  elm.style.border = `${box.borderWidth}px solid ${box.borderColor}`;
+  elm.style.borderRadius = radiusFor(box);
+  elm.style.width = box.width+'px';
+  elm.style.padding = box.padding+'px';
+  elm.style.fontFamily = cfg.overlay.font ? `'${cfg.overlay.font}', sans-serif` : 'inherit';
+}
+
+function taskRowHtml(t, box){
+  if(t.done && cfg.overlay.completedStyle==='hide') return '';
+  let extra='';
+  if(t.done && cfg.overlay.completedStyle==='strikethrough') extra='text-decoration:line-through;opacity:.55;';
+  if(t.done && cfg.overlay.completedStyle==='fade') extra='opacity:.4;';
+  return `<div style="display:flex;align-items:baseline;gap:8px;padding:${cfg.overlay.rowSpacing}px 0;font-size:${box.fontSize}px;${extra}">
+    <span style="opacity:.4;font-size:${Math.max(9,box.fontSize-4)}px;min-width:18px;flex-shrink:0">${esc(String(t.num))}</span>
+    <span style="flex:1">${esc(t.text)}</span>
+  </div>`;
+}
+
+function hostSectionHtml(){
+  const hostTasks = tasks.filter(t=>t.isHost);
+  if(!hostTasks.length) return '';
+  let html = `<div style="font-size:${cfg.hostBox.headerSize}px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;color:${cfg.hostBox.headerColor};padding:0 0 4px">${esc(hostDisplay)}</div>`;
+  html += hostTasks.map(t=>taskRowHtml(t,cfg.hostBox)).join('');
+  return html;
+}
+
+function viewerGroupsHtml(box){
+  const viewerTasks = tasks.filter(t=>!t.isHost);
+  const groups={}, order=[];
+  viewerTasks.forEach(t=>{
+    if(!groups[t.userId]){ groups[t.userId]={display:t.display||t.username,tasks:[]}; order.push(t.userId); }
+    groups[t.userId].tasks.push(t);
+  });
+  let html='';
+  order.forEach(uid=>{
+    const g=groups[uid];
+    html += `<div style="font-size:${box.headerSize}px;font-weight:700;letter-spacing:.08em;opacity:.7;color:${box.headerColor};padding:6px 0 2px;border-top:1px solid ${box.borderColor}55">@${esc(g.display)}</div>`;
+    html += g.tasks.map(t=>taskRowHtml(t,box)).join('');
+  });
+  return { html, count: order.length };
+}
+
+function render(){
+  loadFont(cfg.overlay.font);
+
+  if(!tasks.length){
+    if(!cfg.overlay.separateBoxes){
+      viewerPanel.style.display='none';
+      hostPanel.style.display='block';
+      styleContainer(hostPanel, cfg.hostBox);
+      applyPosition(hostPanel, cfg.overlay.position);
+      hostPanel.innerHTML = '<div style="opacity:.4;font-size:.85rem">No tasks yet</div>';
+    } else {
+      hostPanel.style.display='none';
+      viewerPanel.style.display='none';
+    }
+    return;
+  }
+
+  if(!cfg.overlay.separateBoxes){
+    viewerPanel.style.display='none';
+    hostPanel.style.display='block';
+    styleContainer(hostPanel, cfg.hostBox);
+    applyPosition(hostPanel, cfg.overlay.position);
+
+    const hostHtml = hostSectionHtml();
+    const { html: viewerHtml, count } = viewerGroupsHtml(cfg.viewerBox);
+    let sep = '';
+    if(hostHtml && count){
+      sep = `<div style="border-top:${Math.max(1,cfg.hostBox.borderWidth)}px solid ${cfg.hostBox.borderColor};margin:6px 0;opacity:.5"></div>`;
+    }
+    hostPanel.innerHTML = (hostHtml + sep + viewerHtml) || '<div style="opacity:.4;font-size:.85rem">No tasks yet</div>';
+  } else {
+    const hostHtml = hostSectionHtml();
+    const { html: viewerHtml } = viewerGroupsHtml(cfg.viewerBox);
+
+    if(hostHtml){
+      hostPanel.style.display='block';
+      styleContainer(hostPanel, cfg.hostBox);
+      applyPosition(hostPanel, cfg.hostBox.position);
+      hostPanel.innerHTML = hostHtml;
+    } else {
+      hostPanel.style.display='none';
+    }
+
+    if(viewerHtml){
+      viewerPanel.style.display='block';
+      styleContainer(viewerPanel, cfg.viewerBox);
+      applyPosition(viewerPanel, cfg.viewerBox.position);
+      viewerPanel.innerHTML = viewerHtml;
+    } else {
+      viewerPanel.style.display='none';
+    }
+  }
+}
+
+function applyState(s){
+  if(!s) return;
+  if(s.tasks) tasks = s.tasks;
+  if(s.cfg) deepMerge(cfg, s.cfg);
+  if(s.hostDisplay) hostDisplay = s.hostDisplay;
+  render();
+}
+
+setTool('tasks');
+on('_snapshot', applyState);
+on('tasks_state', ev => applyState(ev.state||{}));
+startPolling();
+</script>
+</body>
+</html>

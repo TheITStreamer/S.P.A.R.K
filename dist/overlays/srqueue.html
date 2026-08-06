@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Song Queue</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:transparent;overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
+
+#panel{
+  display:inline-block;min-width:300px;max-width:420px;
+  background:rgba(15,10,35,.88);
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:16px;padding:14px 16px;
+  opacity:0;transition:opacity .4s ease;
+  backdrop-filter:blur(20px);
+}
+#panel.visible{opacity:1}
+
+.hdr{
+  font-size:.6rem;letter-spacing:.22em;text-transform:uppercase;
+  color:#ffc83d;font-weight:700;margin-bottom:10px;
+  display:flex;align-items:center;gap:6px;
+}
+.hdr-count{
+  background:rgba(255,200,61,.18);color:#ffc83d;
+  border-radius:10px;padding:1px 7px;font-size:.65rem;font-weight:700;
+}
+
+.song{
+  display:flex;align-items:center;gap:10px;
+  padding:7px 0;border-bottom:1px solid rgba(255,255,255,.06);
+}
+.song:last-child{border-bottom:none}
+.num{color:rgba(255,255,255,.28);font-size:.7rem;min-width:16px;text-align:center;flex-shrink:0}
+.thumb{width:38px;height:38px;border-radius:6px;object-fit:cover;flex-shrink:0}
+.thumb-ph{
+  width:38px;height:38px;border-radius:6px;flex-shrink:0;
+  background:rgba(255,255,255,.07);display:flex;align-items:center;
+  justify-content:center;color:rgba(255,255,255,.25);font-size:1.1rem;
+}
+.info{flex:1;min-width:0}
+.title{font-size:.85rem;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{font-size:.7rem;color:rgba(255,255,255,.38);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
+</head>
+<body>
+<div id="panel">
+  <div class="hdr">Song Queue <span class="hdr-count" id="hdrCount">0</span></div>
+  <div id="list"></div>
+</div>
+<script>
+const panel = document.getElementById('panel');
+const list  = document.getElementById('list');
+const hdrCount = document.getElementById('hdrCount');
+
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function render(songs){
+  if(!songs || !songs.length){
+    panel.classList.remove('visible');
+    hdrCount.textContent = '0';
+    return;
+  }
+  hdrCount.textContent = songs.length;
+  list.innerHTML = songs.map((s,i)=>`
+    <div class="song">
+      <span class="num">${i+1}</span>
+      ${s.thumbnail
+        ? `<img class="thumb" src="${esc(s.thumbnail)}" onerror="this.style.display='none'">`
+        : `<div class="thumb-ph">♪</div>`}
+      <div class="info">
+        <div class="title">${esc(s.title || 'Loading...')}</div>
+        <div class="sub">${[s.author ? esc(s.author) : '', s.requester ? '@'+esc(s.requester) : ''].filter(Boolean).join(' · ')}</div>
+      </div>
+    </div>`).join('');
+  panel.classList.add('visible');
+}
+
+let since = 0;
+async function poll(){
+  try{
+    const r = await fetch(`http://localhost:4747/events?since=${since}&tool=srqueue`);
+    if(!r.ok){ setTimeout(poll, 3000); return; }
+    const d = await r.json();
+    since = d.latest || since;
+    // Snapshot on first connect
+    if(since === 0 && d.snapshot && d.snapshot.type === 'srqueue'){
+      render(d.snapshot.songs || []);
+    }
+    for(const ev of (d.events || [])){
+      if(ev.type === 'srqueue')      render(ev.songs || []);
+      if(ev.type === 'srqueue_hide') panel.classList.remove('visible');
+    }
+  }catch(e){}
+  setTimeout(poll, 500);
+}
+poll();
+</script>
+</body>
+</html>

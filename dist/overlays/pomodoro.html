@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pomodoro Overlay</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}
+#panel{position:fixed;box-sizing:border-box;text-align:center;transition:background .3s,color .3s,border-color .3s}
+.time{font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
+.phase{letter-spacing:.22em;font-weight:700}
+.dot{display:inline-block;border-radius:50%;margin:0 4px}
+</style>
+</head>
+<body>
+<div id="panel" style="display:none"></div>
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+
+const panel = document.getElementById('panel');
+let st = null;                     // last pushed state
+const PHASE_LABEL = { work:'FOCUS', short:'SHORT BREAK', long:'LONG BREAK', await:'READY', idle:'' };
+
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+const loadedFonts = new Set();
+function loadFont(f){
+  if(!f||loadedFonts.has(f)) return; loadedFonts.add(f);
+  const l=document.createElement('link'); l.rel='stylesheet';
+  l.href=`https://fonts.googleapis.com/css2?family=${encodeURIComponent(f)}&display=swap`;
+  document.head.appendChild(l);
+}
+
+function remainMs(){
+  const r=st.run;
+  if(r.paused) return r.pausedRemain;
+  if(r.phase==='work'||r.phase==='short'||r.phase==='long') return Math.max(0, r.endsAt-Date.now());
+  return 0;
+}
+function mmss(ms){
+  const s=Math.max(0,Math.ceil(ms/1000));
+  return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+}
+function timeStr(){
+  const r=st.run;
+  const running=r.phase==='work'||r.phase==='short'||r.phase==='long';
+  if(running) return mmss(remainMs());
+  if(r.phase==='await') return mmss(st.totalMs||0);
+  return mmss((st.mode?.work||25)*60000);
+}
+function pct(){
+  const r=st.run;
+  const running=r.phase==='work'||r.phase==='short'||r.phase==='long';
+  if(!running||!st.totalMs) return 0;
+  return Math.max(0,Math.min(1,1-remainMs()/st.totalMs));
+}
+
+function applyPosition(pos, scale){
+  panel.style.top=panel.style.right=panel.style.bottom=panel.style.left='auto';
+  panel.style.transform='';
+  panel.style.transformOrigin='top left';
+  const m=pos.mode||'top-right';
+  const sc=(scale||100)/100;
+  const t=`scale(${sc})`;
+  if(m==='top-left'){ panel.style.top='20px'; panel.style.left='20px'; panel.style.transform=t; }
+  else if(m==='top-right'){ panel.style.top='20px'; panel.style.right='20px'; panel.style.transform=t; panel.style.transformOrigin='top right'; }
+  else if(m==='top-center'){ panel.style.top='20px'; panel.style.left='50%'; panel.style.transform=`translateX(-50%) ${t}`; panel.style.transformOrigin='top center'; }
+  else if(m==='bottom-left'){ panel.style.bottom='20px'; panel.style.left='20px'; panel.style.transform=t; panel.style.transformOrigin='bottom left'; }
+  else if(m==='bottom-right'){ panel.style.bottom='20px'; panel.style.right='20px'; panel.style.transform=t; panel.style.transformOrigin='bottom right'; }
+  else if(m==='bottom-center'){ panel.style.bottom='20px'; panel.style.left='50%'; panel.style.transform=`translateX(-50%) ${t}`; panel.style.transformOrigin='bottom center'; }
+  else if(m==='center'){ panel.style.top='50%'; panel.style.left='50%'; panel.style.transform=`translate(-50%,-50%) ${t}`; panel.style.transformOrigin='center'; }
+  else if(m==='custom'){ panel.style.top=(pos.y||0)+'px'; panel.style.left=(pos.x||0)+'px'; panel.style.transform=t; }
+}
+
+function dotsHtml(col){
+  const r=st.run, sprints=st.mode?.sprints||4;
+  let h='';
+  for(let i=1;i<=sprints;i++){
+    const done = i<r.sprint || (i===r.sprint && (r.phase==='short'||r.phase==='long'||(r.phase==='await'&&r.next!=='work')));
+    const active = i===r.sprint && r.phase==='work';
+    h+=`<span class="dot" style="width:12px;height:12px;background:${done?col:'transparent'};border:2px solid ${col};${active?'box-shadow:0 0 8px '+col:''};opacity:${done||active?1:.45}"></span>`;
+  }
+  return h;
+}
+
+const RING_R=54, RING_C=2*Math.PI*RING_R;
+function ringHtml(col, th){
+  return `<div style="position:relative;width:150px;height:150px;margin:0 auto">
+    <svg width="150" height="150" viewBox="0 0 130 130" style="transform:rotate(-90deg)">
+      <circle cx="65" cy="65" r="${RING_R}" fill="none" stroke="${th.border}" stroke-width="8" opacity=".55"/>
+      <circle id="ringFg" cx="65" cy="65" r="${RING_R}" fill="none" stroke="${col}" stroke-width="8"
+        stroke-linecap="round" stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C*(1-pct())}"/>
+    </svg>
+    <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+      <span class="time" id="timeEl" style="display:inline-block;min-width:5.2ch;text-align:center;font-size:1.9rem">${timeStr()}</span>
+    </div>
+  </div>`;
+}
+
+function render(){
+  if(!st || st.enabled===false){ panel.style.display='none'; return; }
+  const r=st.run, th=st.theme||{}, ov=st.overlay||{};
+  if(r.phase==='idle' && !st.focusTask){ panel.style.display='none'; return; }
+  panel.style.display='block';
+
+  if(th.font) loadFont(th.font);
+  const fontStack = th.mono ? `'${th.font}','Courier New',monospace` : (th.font ? `'${th.font}',sans-serif` : 'system-ui,sans-serif');
+  const isBreak = r.phase==='short'||r.phase==='long'||(r.phase==='await'&&r.next!=='work');
+  const col = isBreak ? (th.brk||'#7dd490') : (th.work||'#ffd9a0');
+  const label = r.phase==='await' ? `NEXT: ${PHASE_LABEL[r.next]||''}` : (PHASE_LABEL[r.phase]||'READY');
+
+  panel.style.background=th.bg||'#17171c';
+  panel.style.color=th.text||'#fff';
+  panel.style.border=`2px solid ${th.border||'#333'}`;
+  panel.style.borderRadius=(th.radius!=null?th.radius:14)+'px';
+  panel.style.padding='18px 26px';
+  // fixed width so the box never reshapes as digits change
+  panel.style.width='250px';
+  panel.style.fontFamily=fontStack;
+  panel.style.backdropFilter=th.glass?'blur(10px)':'';
+  panel.style.boxShadow=th.glow?`0 0 24px ${th.accent||col}66`:(th.pixel?`6px 6px 0 ${th.border}`:'');
+
+  const style=ov.style||'ring';
+  let body='';
+  if(style==='ring'){
+    body=ringHtml(col, th);
+  } else {
+    body=`<div style="line-height:1.1"><span class="time" id="timeEl" style="display:inline-block;min-width:5.2ch;text-align:center;font-size:2.8rem">${timeStr()}</span></div>`;
+    if(style==='bar'){
+      body+=`<div style="height:8px;border-radius:4px;background:${th.border};margin-top:10px;overflow:hidden">
+        <div id="barFg" style="height:100%;width:${pct()*100}%;background:${col};border-radius:4px;transition:width .25s linear"></div></div>`;
+    }
+  }
+
+  panel.innerHTML=`
+    ${ov.showMode&&st.mode?`<div style="font-size:.62rem;opacity:.7;letter-spacing:.12em;margin-bottom:2px">${esc(st.mode.name)}</div>`:''}
+    ${ov.showPhase!==false?`<div class="phase" style="font-size:.72rem;color:${col};margin-bottom:6px">${label}${r.paused?' · PAUSED':''}</div>`:''}
+    ${body}
+    ${ov.showDots!==false?`<div style="margin-top:8px">${dotsHtml(col)}</div>`:''}
+    ${ov.showTask!==false&&st.focusTask?`<div style="font-size:.8rem;opacity:.9;margin-top:10px;border-top:1px solid ${th.border};padding-top:8px;max-width:260px;margin-left:auto;margin-right:auto">${esc(st.focusTask)}</div>`:''}
+  `;
+  applyPosition(ov.position||{mode:'top-right'}, ov.scale);
+}
+
+// cheap per-frame updates (no full re-render)
+setInterval(()=>{
+  if(!st) return;
+  const r=st.run;
+  const running=r.phase==='work'||r.phase==='short'||r.phase==='long';
+  if(!running) return;
+  const t=document.getElementById('timeEl');
+  if(t) t.textContent=timeStr();
+  const ring=document.getElementById('ringFg');
+  if(ring) ring.setAttribute('stroke-dashoffset', String(RING_C*(1-pct())));
+  const bar=document.getElementById('barFg');
+  if(bar) bar.style.width=(pct()*100)+'%';
+},250);
+
+setTool('pomodoro');
+on('_snapshot', s=>{ if(s&&s.run){ st=s; render(); } });
+on('pomodoro_state', ev=>{ if(ev.state){ st=ev.state; render(); } });
+startPolling();
+</script>
+</body>
+</html>

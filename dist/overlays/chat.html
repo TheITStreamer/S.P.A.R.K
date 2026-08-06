@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Chat Overlay</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:transparent;overflow:hidden}
+#chatBg{position:fixed;inset:0;z-index:0}
+#chatWrap{
+  position:fixed;inset:0;display:flex;flex-direction:column;
+  padding:16px;overflow:hidden;z-index:1;pointer-events:none;
+}
+#chatList{display:flex;flex-direction:column;width:100%}
+#chatWrap.align-left #chatList{align-items:flex-start}
+#chatWrap.align-right #chatList{align-items:flex-end}
+#chatWrap.align-center #chatList{align-items:center}
+#chatWrap.dir-up{justify-content:flex-end}
+#chatWrap.dir-up #chatList{flex-direction:column}
+#chatWrap.dir-down{justify-content:flex-start}
+#chatWrap.dir-down #chatList{flex-direction:column-reverse}
+
+.chat-msg{
+  display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:.35em;
+  max-width:100%;word-break:break-word;line-height:1.35;
+}
+.chat-msg.shape-rounded{border-radius:10px}
+/* Pill radius is set inline per-message (capped relative to font size) — a
+   flat 999px degenerates into a lens/oval on wrapped multi-line messages. */
+.chat-msg.shape-pill{border-radius:24px}
+.chat-msg.shape-square{border-radius:3px}
+.chat-msg.shape-speech{border-radius:14px;position:relative}
+.chat-msg.shape-speech.tail-left::after{
+  content:'';position:absolute;left:14px;bottom:-7px;border-width:8px 8px 0 0;
+  border-style:solid;border-color:var(--tailclr,transparent) transparent transparent transparent;
+}
+.chat-msg.shape-hex{clip-path:polygon(3.5% 0,96.5% 0,100% 50%,96.5% 100%,3.5% 100%,0 50%)}
+.chat-msg.shape-none{background:transparent!important;border:none!important;box-shadow:none!important;padding:2px 4px!important}
+
+.chat-badge{flex-shrink:0}
+.chat-badge-img{height:1.25em;width:auto;max-width:2.5em;object-fit:contain;vertical-align:middle}
+.chat-user{font-weight:800;white-space:nowrap}
+.chat-colon{opacity:.75}
+.chat-text{white-space:pre-wrap}
+.chat-emote{height:1.5em;vertical-align:middle;display:inline-block}
+
+.chat-msg.alert{font-weight:800}
+.chat-alert-icon{flex-shrink:0}
+
+@keyframes slideFromBottom{from{transform:translateY(40px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes slideFromTop{from{transform:translateY(-40px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes slideFromLeft{from{transform:translateX(-40px);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes slideFromRight{from{transform:translateX(40px);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes popIn{0%{transform:scale(0);opacity:0}70%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
+@keyframes bounceIn{0%{transform:scale(.3);opacity:0}55%{transform:scale(1.12)}75%{transform:scale(.94)}100%{transform:scale(1);opacity:1}}
+@keyframes kawaiiIn{0%{transform:scale(0) rotate(-10deg);opacity:0}55%{transform:scale(1.12) rotate(5deg)}78%{transform:scale(.94) rotate(-3deg)}100%{transform:scale(1) rotate(0);opacity:1}}
+@keyframes fadeOutMsg{to{opacity:0;transform:translateY(-6px) scale(.96)}}
+</style>
+</head>
+<body>
+<div id="chatBg"></div>
+<div id="chatWrap"><div id="chatList"></div></div>
+
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+import { defaultCfg, deepMerge } from '/js/chat-defaults.js';
+
+const qs = new URLSearchParams(location.search);
+const DEMO = qs.get('demo') === '1';
+
+const wrap = document.getElementById('chatWrap');
+const list = document.getElementById('chatList');
+const bg   = document.getElementById('chatBg');
+
+let CFG = defaultCfg();
+let emoteMap = {};
+const loadedFonts = new Set();
+
+function loadFont(font){
+  if(!font || loadedFonts.has(font)) return;
+  loadedFonts.add(font);
+  const l = document.createElement('link');
+  l.rel = 'stylesheet';
+  l.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(font)}:wght@400;600;700;800&display=swap`;
+  document.head.appendChild(l);
+}
+
+function hexToRgba(hex, a){
+  hex = (hex||'#000000').replace('#','');
+  if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+  const r = parseInt(hex.substr(0,2),16)||0, g = parseInt(hex.substr(2,2),16)||0, b = parseInt(hex.substr(4,2),16)||0;
+  return `rgba(${r},${g},${b},${a==null?1:a})`;
+}
+
+function applyBackground(){
+  const l = CFG.layout;
+  wrap.className = `align-${l.align||'left'} dir-${l.direction||'up'}`;
+  list.style.gap = (l.gap==null?8:l.gap)+'px';
+  list.style.width = (l.width||460)+'px';
+  wrap.style.padding = (l.padding==null?10:l.padding)+'px';
+  bg.style.backdropFilter = '';
+  bg.style.background = 'transparent';
+  if(l.bg==='solid'){
+    bg.style.background = hexToRgba(l.bgColor, l.bgOpacity==null?1:l.bgOpacity);
+  } else if(l.bg==='gradient'){
+    bg.style.background = `linear-gradient(135deg, ${hexToRgba(l.bgColor,l.bgOpacity==null?1:l.bgOpacity)}, ${hexToRgba(l.bgColor2,l.bgOpacity==null?1:l.bgOpacity)})`;
+  } else if(l.bg==='panel'){
+    bg.style.background = hexToRgba(l.bgColor, l.bgOpacity==null?.35:l.bgOpacity);
+    if(l.panelBlur) bg.style.backdropFilter = 'blur(6px)';
+  } else if(l.bg==='image' && l.bgImage){
+    bg.style.background = `${hexToRgba('#000000',0)} url("${l.bgImage}") center/cover no-repeat`;
+  }
+}
+
+function roleFor(ev){
+  if(ev.is_broadcaster) return 'broadcaster';
+  if(ev.is_mod) return 'moderator';
+  if(ev.is_vip) return 'vip';
+  if(ev.is_sub) return 'subscriber';
+  if(ev.is_follower) return 'follower';
+  return 'everyone';
+}
+
+function animName(anim, dir){
+  if(anim==='fade') return 'fadeIn';
+  if(anim==='pop') return 'popIn';
+  if(anim==='bounce') return 'bounceIn';
+  if(anim==='kawaii') return 'kawaiiIn';
+  // slide
+  if(dir==='top') return 'slideFromTop';
+  if(dir==='left') return 'slideFromLeft';
+  if(dir==='right') return 'slideFromRight';
+  return 'slideFromBottom';
+}
+
+function escHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function renderText(msg, emotesTag){
+  const l = CFG.layout;
+  if(!l.showEmotes) return escHtml(msg);
+
+  // Preferred: Twitch's per-message emote ranges — works for emotes from ANY
+  // channel, and the /default/ CDN format serves the animated version when
+  // one exists (static otherwise).
+  if(emotesTag){
+    const chars = Array.from(msg||''); // ranges are unicode code-point indices
+    const ranges = [];
+    emotesTag.split('/').forEach(part=>{
+      const i = part.indexOf(':'); if(i<0) return;
+      const id = part.slice(0,i);
+      part.slice(i+1).split(',').forEach(r=>{
+        const [s,e] = r.split('-').map(Number);
+        if(Number.isInteger(s)&&Number.isInteger(e)&&e>=s) ranges.push({id,s,e});
+      });
+    });
+    if(ranges.length){
+      ranges.sort((a,b)=>a.s-b.s);
+      let out='', pos=0;
+      ranges.forEach(({id,s,e})=>{
+        if(s<pos||s>=chars.length) return; // overlapping or bad range — skip
+        out += escHtml(chars.slice(pos,s).join(''));
+        const name = chars.slice(s,e+1).join('');
+        out += `<img class="chat-emote" src="https://static-cdn.jtvnw.net/emoticons/v2/${encodeURIComponent(id)}/default/dark/2.0" alt="${escHtml(name)}">`;
+        pos = e+1;
+      });
+      out += escHtml(chars.slice(pos).join(''));
+      return out;
+    }
+  }
+
+  // Fallback: name-map lookup (channel + global emotes fetched via Helix)
+  const escd = escHtml(msg);
+  if(!Object.keys(emoteMap).length) return escd;
+  return escd.split(/(\s+)/).map(tok=>{
+    const url = emoteMap[tok.trim()];
+    if(url && tok.trim()) return `<img class="chat-emote" src="${url}" alt="${tok}">`;
+    return tok;
+  }).join('');
+}
+
+function trimList(){
+  const max = CFG.layout.maxMessages || 20;
+  while(list.children.length > max){
+    // dir-down uses column-reverse, so DOM-first child is visually oldest either way
+    list.removeChild(list.firstElementChild);
+  }
+}
+
+function scheduleRemoval(card, secs){
+  if(!secs) return;
+  setTimeout(()=>{
+    card.style.animation = 'fadeOutMsg .4s ease forwards';
+    setTimeout(()=>card.remove(), 420);
+  }, secs*1000);
+}
+
+function renderMessage(ev){
+  const role = roleFor(ev);
+  const rs = CFG.roles[role] || CFG.roles.everyone;
+  loadFont(rs.font);
+
+  const card = document.createElement('div');
+  card.className = `chat-msg shape-${rs.shape||'rounded'}`;
+  card.style.padding = rs.shape==='none' ? '2px 4px' : '6px 12px';
+  if(rs.shape==='hex') card.style.padding = '6px 22px';
+  const bgCol = hexToRgba(rs.bgColor, rs.bgOpacity==null?.85:rs.bgOpacity);
+  card.style.background = bgCol;
+  if(rs.borderWidth){ card.style.border = `${rs.borderWidth}px solid ${rs.borderColor}`; }
+  if(rs.glow){ card.style.boxShadow = `0 0 ${rs.glowSize||14}px ${rs.glowColor||rs.borderColor}`; }
+  card.style.fontFamily = `'${rs.font||'Segoe UI'}',sans-serif`;
+  card.style.fontSize = (rs.fontSize||15)+'px';
+  card.style.fontWeight = rs.fontWeight||600;
+  card.style.fontStyle = rs.italic ? 'italic' : 'normal';
+  card.style.color = rs.textColor || '#fff';
+  if(rs.shape==='none'){
+    card.style.textShadow = '0 1px 3px rgba(0,0,0,.85)';
+  }
+  if(rs.shape==='speech'){
+    card.classList.add('tail-left');
+    card.style.setProperty('--tailclr', bgCol);
+  }
+  if(rs.shape==='pill'){
+    // Cap the radius relative to font size instead of an unbounded 999px —
+    // on wrapped multi-line messages a flat 999px forces the browser to
+    // scale both corner curves to the full box height, which makes them
+    // overlap into a lens/oval shape that clips the text (see shape-pill).
+    card.style.borderRadius = Math.round((rs.fontSize||15)*1.7) + 'px';
+  }
+
+  let inner = '';
+  if(CFG.layout.showTimestamp){
+    const t = new Date();
+    inner += `<span class="chat-badge" style="opacity:.55;font-size:.8em">${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}</span>`;
+  }
+  if(CFG.layout.showBadgeIcons && rs.badge && (rs.badgeImage || rs.badgeIcon)){
+    inner += rs.badgeImage
+      ? `<img class="chat-badge chat-badge-img" src="${rs.badgeImage}">`
+      : `<span class="chat-badge">${rs.badgeIcon}</span>`;
+  }
+  const uColor = (rs.usernameColor==='auto' && ev.color) ? ev.color : (rs.usernameColor||'#fff');
+  inner += `<span class="chat-user" style="color:${uColor}">${(ev.display||ev.username||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>`;
+  inner += `<span class="chat-colon">:</span>`;
+  inner += `<span class="chat-text">${renderText(ev.message, ev.emotes)}</span>`;
+  card.innerHTML = inner;
+
+  card.style.animation = `${animName(CFG.layout.animIn, CFG.layout.animInDir)} .45s cubic-bezier(.22,1,.36,1) forwards`;
+  list.appendChild(card);
+  trimList();
+  if(CFG.layout.autoFade) scheduleRemoval(card, CFG.layout.fadeAfter);
+}
+
+function renderAlert(kind, name){
+  const as = CFG.alerts[kind];
+  if(!as || as.enabled===false) return;
+  loadFont(as.font);
+
+  const card = document.createElement('div');
+  card.className = `chat-msg alert shape-${as.shape||'pill'}`;
+  card.style.padding = '8px 16px';
+  if(as.shape==='hex') card.style.padding = '8px 26px';
+  const abgCol = as.bgColor || '#2a1750';
+  card.style.background = abgCol;
+  if(as.glow){ card.style.boxShadow = `0 0 ${as.glowSize||18}px ${as.glowColor||as.bgColor}`; }
+  card.style.fontFamily = `'${as.font||'Segoe UI'}',sans-serif`;
+  card.style.fontSize = (as.fontSize||16)+'px';
+  card.style.fontWeight = as.fontWeight||800;
+  card.style.color = as.textColor || '#fff';
+  if(as.shape==='speech'){
+    card.classList.add('tail-left');
+    card.style.setProperty('--tailclr', abgCol);
+  }
+  if(as.shape==='pill'){
+    card.style.borderRadius = Math.round((as.fontSize||16)*1.7) + 'px';
+  }
+
+  const text = (as.text||'{name}').replace('{name}', name||'someone');
+  card.innerHTML = (as.icon?`<span class="chat-alert-icon">${as.icon}</span>`:'') + `<span class="chat-text">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>`;
+
+  card.style.animation = `${animName(as.animIn, as.animInDir)} .5s cubic-bezier(.22,1,.36,1) forwards`;
+  list.appendChild(card);
+  trimList();
+  scheduleRemoval(card, as.duration||6);
+}
+
+// ── Live wiring ────────────────────────────────────────────────────────────
+on('_snapshot', snap=>{
+  if(snap && snap.cfg) CFG = deepMerge(defaultCfg(), snap.cfg);
+  applyBackground();
+});
+on('settings', ev=>{
+  CFG = deepMerge(defaultCfg(), ev.cfg||{});
+  applyBackground();
+});
+on('emotes', ev=>{
+  emoteMap = {};
+  (ev.emotes||[]).forEach(e=>{ if(e.name) emoteMap[e.name] = e.url; });
+});
+if(!DEMO){
+  on('message', ev=>renderMessage(ev));
+  on('alert', ev=>renderAlert(ev.kind, ev.name));
+}
+
+setTool('chat');
+startPolling();
+
+// ── Demo mode: cycles through every role + both alerts so the settings
+// panel's live preview shows every customization option in motion. ──────────
+if(DEMO){
+  const demoMsgs = [
+    { display:'ChattyFan',  message:'this stream is so good today!', is_mod:false, is_sub:false, is_vip:false, is_broadcaster:false, is_follower:false, color:'#ff8f4c' },
+    { display:'FollowerFinn', message:'just found this stream, loving it', is_follower:true, color:'#5ce1ff' },
+    { display:'LoyalSubby', message:'poggers moment right there', is_sub:true, color:'#00b7ff' },
+    { display:'VIPVince',   message:'welcome back everyone!', is_vip:true, color:'#e066ff' },
+    { display:'ModMaria',   message:'reminder: be nice in chat :)', is_mod:true, color:'#43d17a' },
+    { display:'TheStreamer',message:'thanks for hanging out chat!', is_broadcaster:true, color:'#ffc83d' },
+  ];
+  let i = 0;
+  function tick(){
+    const step = i % 8;
+    if(step < 6) renderMessage(demoMsgs[step]);
+    else if(step === 6) renderAlert('follow', 'NewFollower'+Math.floor(Math.random()*99));
+    else renderAlert('sub', 'FreshSub'+Math.floor(Math.random()*99));
+    i++;
+    setTimeout(tick, 1900);
+  }
+  setTimeout(tick, 600);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Now Playing</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:transparent;overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
+
+.np-outer{position:fixed;opacity:0;transition:opacity .5s ease, transform .5s ease}
+.np-outer.visible{opacity:1}
+.np-outer.gone{opacity:0;pointer-events:none}
+
+.pos-left  {bottom:30px;left:30px;transform:translateY(16px)}
+.pos-left.visible{transform:translateY(0)}
+.pos-left.gone  {transform:translateY(16px)}
+
+.pos-center{bottom:30px;left:50%;transform:translateX(-50%) translateY(16px)}
+.pos-center.visible{transform:translateX(-50%) translateY(0)}
+.pos-center.gone  {transform:translateX(-50%) translateY(16px)}
+
+.pos-banner{bottom:0;left:0;right:0;transform:translateY(100%)}
+.pos-banner.visible{transform:translateY(0)}
+.pos-banner.gone  {transform:translateY(100%)}
+
+/* ════ Shadow toggle (applies to any card-like style) ════ */
+.no-shadow{box-shadow:none!important}
+
+/* ════ CARD ════ */
+#npCard{width:460px;border-radius:18px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.7);position:relative}
+#npCard .bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(30px) brightness(.28) saturate(1.5);transform:scale(1.15)}
+#npCard .row{position:relative;z-index:1;display:flex;gap:16px;padding:18px 18px 12px;align-items:center}
+#npCard .art{width:90px;height:90px;border-radius:12px;object-fit:cover;box-shadow:0 4px 16px rgba(0,0,0,.5);flex-shrink:0}
+#npCard .art-ph{width:90px;height:90px;border-radius:12px;background:rgba(255,255,255,.08);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:2rem}
+#npCard .meta{flex:1;min-width:0;overflow:hidden}
+#npCard .title{font-size:1.1rem;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 6px rgba(0,0,0,.6)}
+#npCard .artist{font-size:.88rem;color:rgba(255,255,255,.65);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#npCard .requester{font-size:.72rem;color:rgba(255,255,255,.35);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#npCard .prow{position:relative;z-index:1;padding:0 18px 16px}
+
+/* ════ MINIMAL ════ */
+#npMin{width:500px;text-align:center;padding:12px 20px;background:rgba(0,0,0,.5);backdrop-filter:blur(16px);border-radius:14px}
+#npMin .meta{overflow:hidden}
+#npMin .title{font-size:1.5rem;font-weight:800;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.9);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#npMin .artist{font-size:.95rem;color:rgba(255,255,255,.6);margin-top:5px;text-shadow:0 1px 6px rgba(0,0,0,.8)}
+#npMin .prow{margin-top:10px}
+
+/* ════ BANNER ════ */
+#npBanner{position:relative;background:rgba(8,6,24,.93);backdrop-filter:blur(16px);border-top:2px solid rgba(255,255,255,.07);display:flex;align-items:center;gap:16px;padding:0 32px;height:86px}
+#npBanner .art{width:56px;height:56px;border-radius:8px;object-fit:cover;flex-shrink:0}
+#npBanner .art-ph{width:56px;height:56px;border-radius:8px;background:rgba(255,255,255,.08);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.5rem}
+#npBanner .meta{flex:1;min-width:0;overflow:hidden}
+#npBanner .trow{display:flex;align-items:baseline;min-width:0}
+#npBanner .title{flex:0 1 auto;min-width:0;font-size:1.15rem;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#npBanner .btime{flex-shrink:0;font-size:.95rem;font-weight:600;color:rgba(255,255,255,.55);margin-left:12px}
+#npBanner .artist{font-size:.95rem;color:rgba(255,255,255,.5);margin-top:3px}
+#npBanner .requester{font-size:.8rem;color:rgba(255,255,255,.3);margin-top:1px}
+/* seek bar runs the full width of the banner, along its top edge */
+#npBanner .prow{position:absolute;top:0;left:0;right:0;padding:0}
+#npBanner .prow .track{height:5px;border-radius:0;background:rgba(255,255,255,.12)}
+#npBanner .prow .fill{border-radius:0}
+#npBanner .prow .times{display:none}
+
+/* ════ BLEND — album art bleeding into a dark gradient panel ════ */
+#npBlend{width:460px;height:100px;border-radius:20px;overflow:hidden;box-shadow:0 14px 36px rgba(0,0,0,.6);position:relative;display:flex;align-items:stretch}
+#npBlend .bg{position:absolute;inset:0;background-size:cover;background-position:center;filter:blur(45px) brightness(.4) saturate(1.7);transform:scale(1.35)}
+#npBlend .veil{position:absolute;inset:0;background:linear-gradient(90deg,rgba(9,7,20,.1) 0%,rgba(9,7,20,.88) 52%,rgba(9,7,20,.96) 100%)}
+#npBlend .art{position:relative;z-index:1;width:100px;height:100px;object-fit:cover;border-radius:20px 0 0 20px;box-shadow:4px 0 18px rgba(0,0,0,.4);flex-shrink:0}
+#npBlend .art-ph{position:relative;z-index:1;width:100px;height:100px;border-radius:20px 0 0 20px;background:rgba(255,255,255,.08);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:2rem}
+#npBlend .meta{position:relative;z-index:1;flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;padding:0 22px;overflow:hidden}
+#npBlend .title{font-size:1.2rem;font-weight:800;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 8px rgba(0,0,0,.5)}
+#npBlend .artist{font-size:.88rem;color:rgba(255,255,255,.7);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#npBlend .requester{font-size:.72rem;color:rgba(255,255,255,.4);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#npBlend .prow{position:absolute;left:0;right:0;bottom:0;z-index:2;padding:0}
+#npBlend .prow .track{height:4px;border-radius:0;background:rgba(255,255,255,.15)}
+#npBlend .prow .fill{border-radius:0}
+#npBlend .prow .times{display:none}
+
+
+/* ════ Shared progress bar ════ */
+.prow .track{height:4px;background:rgba(255,255,255,.18);border-radius:2px;overflow:hidden}
+.prow .fill{height:100%;width:0%;background:#ffc83d;border-radius:2px}
+.prow .times{display:flex;justify-content:space-between;font-size:.72rem;color:rgba(255,255,255,.4);margin-top:5px}
+
+/* ════ Title scroll ════ */
+.title-text{display:inline-block;white-space:nowrap}
+@keyframes titleScroll{
+  0%,12%  {transform:translateX(0)}
+  42%,58% {transform:translateX(var(--scroll-tx,0))}
+  88%,100%{transform:translateX(0)}
+}
+.title-text.do-scroll{animation:titleScroll 8s ease-in-out infinite}
+</style>
+</head>
+<body>
+<div id="outer" class="np-outer gone"></div>
+
+<script>
+const outer = document.getElementById('outer');
+let curStyle='', curTitle='', curThumb='', curRequester='', curNoShadow=false, curSeekCol='';
+let interpTimer=null;
+let lastProgress=0, lastDuration=1, lastPollMs=Date.now(), isPlaying=false;
+
+function fmt(s){ s=Math.floor(s||0); return Math.floor(s/60)+':'+(s%60).toString().padStart(2,'0'); }
+// Song titles/artists come from YouTube and can contain <, &, quotes — escape
+// everything before it goes into innerHTML (safe in text AND attributes).
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+function pct(p,d){ return d>0?Math.min(100,(p/d)*100):0; }
+
+function seekCol(ev){ return ev.seekColor || '#ffc83d'; }
+
+function progHTML(ev){
+  return `<div class="prow">
+    <div class="track"><div class="fill" id="npFill" style="width:${pct(ev.progress,ev.duration)}%;background:${seekCol(ev)}"></div></div>
+    <div class="times"><span id="npTime">${fmt(ev.progress)}</span><span>${fmt(ev.duration)}</span></div>
+  </div>`;
+}
+
+function artHTML(ev, cls='art'){
+  return ev.thumbnail
+    ? `<img class="${cls}" src="${esc(ev.thumbnail)}" onerror="this.style.display='none'">`
+    : `<div class="art-ph">♪</div>`;
+}
+
+function buildInner(style, ev){
+  const th = esc(ev.thumbnail || '');
+  const t  = esc(ev.title || '');
+  const au = esc(ev.author || '');
+  const al = esc(ev.album || '');
+  const rq = esc(ev.requester || '');
+  const shadowCls = ev.noShadow ? ' no-shadow' : '';
+
+  if(style==='card'){
+    return `<div id="npCard" class="${shadowCls.trim()}">
+      <div class="bg" style="background-image:url('${th}')"></div>
+      <div class="row">
+        <div class="art-wrap">${artHTML(ev)}</div>
+        <div class="meta">
+          <div class="title"><span class="title-text">${t}</span></div>
+          <div class="artist">${au}${al?' · '+al:''}</div>
+          ${rq?`<div class="requester">Req: @${rq}</div>`:''}
+        </div>
+      </div>${progHTML(ev)}</div>`;
+  }
+  if(style==='minimal'){
+    return `<div id="npMin">
+      <div class="meta">
+        <div class="title"><span class="title-text">${t}</span></div>
+        <div class="artist">${au}</div>
+      </div>
+      ${progHTML(ev)}</div>`;
+  }
+  if(style==='banner'){
+    // Seek bar spans the banner's top edge; time sits inline after the title.
+    return `<div id="npBanner">
+      <div class="prow"><div class="track"><div class="fill" id="npFill" style="width:${pct(ev.progress,ev.duration)}%;background:${seekCol(ev)}"></div></div></div>
+      ${artHTML(ev)}
+      <div class="meta">
+        <div class="trow">
+          <div class="title"><span class="title-text">${t}</span></div>
+          <span class="btime"><span id="npTime">${fmt(ev.progress)}</span> / ${fmt(ev.duration)}</span>
+        </div>
+        <div class="artist">${au}${rq?' · @'+rq:''}</div>
+      </div></div>`;
+  }
+  if(style==='blend'){
+    return `<div id="npBlend" class="${shadowCls.trim()}">
+      <div class="bg" style="background-image:url('${th}')"></div>
+      <div class="veil"></div>
+      ${artHTML(ev)}
+      <div class="meta">
+        <div class="title"><span class="title-text">${t}</span></div>
+        <div class="artist">${au}${al?' · '+al:''}</div>
+        ${rq?`<div class="requester">Req: @${rq}</div>`:''}
+      </div>
+      ${progHTML(ev)}</div>`;
+  }
+  // Unrecognised styles fall back to card
+  return buildInner('card', ev);
+}
+
+// Title scroll — animates inner span so the clip boundary (.title) stays fixed.
+// Must use titleDiv.scrollWidth (not span.offsetWidth) because text-overflow:ellipsis
+// truncates the rendered span, making offsetWidth == clientWidth and masking the overflow.
+function initTitleScroll(){
+  setTimeout(()=>{
+    outer.querySelectorAll('.title').forEach(titleDiv => {
+      const span = titleDiv.querySelector('.title-text');
+      if(!span) return;
+      span.classList.remove('do-scroll');
+      span.style.removeProperty('--scroll-tx');
+      titleDiv.style.textOverflow = '';
+      const overflow = titleDiv.scrollWidth - titleDiv.clientWidth;
+      if(overflow > 4){
+        span.style.setProperty('--scroll-tx', '-' + (overflow + 8) + 'px');
+        span.classList.add('do-scroll');
+        titleDiv.style.textOverflow = 'clip'; // suppress ellipsis while scrolling
+      }
+    });
+  }, 150);
+}
+
+function posClass(style){
+  if(style==='banner') return 'pos-banner';
+  if(style==='minimal') return 'pos-center';
+  return 'pos-left'; // card, blend
+}
+
+function updateFill(progress, duration){
+  const f=document.getElementById('npFill'), t=document.getElementById('npTime');
+  if(f) f.style.width=pct(progress,duration)+'%';
+  if(t) t.textContent=fmt(progress);
+}
+
+function thumbBase(url){ return url ? url.split('?')[0] : ''; }
+
+function update(ev){
+  if(!ev||!ev.title){ hide(); return; }
+
+  const style = ev.style || 'card';
+  isPlaying = !!ev.isPlaying;
+  lastProgress = ev.progress || 0; lastDuration = ev.duration || 1; lastPollMs = Date.now();
+
+  const rebuild = style!==curStyle || ev.title!==curTitle || thumbBase(ev.thumbnail)!==thumbBase(curThumb) || (ev.requester||'')!==curRequester || !!ev.noShadow!==curNoShadow || seekCol(ev)!==curSeekCol;
+  curStyle = style; curTitle = ev.title || ''; curThumb = ev.thumbnail || ''; curRequester = ev.requester || ''; curNoShadow = !!ev.noShadow; curSeekCol = seekCol(ev);
+
+  if(rebuild){
+    outer.className = 'np-outer gone ' + posClass(style);
+    outer.innerHTML = buildInner(style, ev);
+    outer.offsetHeight; // force reflow
+    outer.classList.remove('gone');
+    outer.classList.add('visible');
+
+    initTitleScroll();
+  } else {
+    updateFill(ev.progress, ev.duration);
+  }
+
+  if(interpTimer) clearInterval(interpTimer);
+  interpTimer = setInterval(()=>{
+    if(!isPlaying) return;
+    const elapsed = (Date.now() - lastPollMs) / 1000;
+    updateFill(Math.min(lastProgress + elapsed, lastDuration), lastDuration);
+  }, 100);
+}
+
+function hide(){
+  outer.classList.remove('visible'); outer.classList.add('gone');
+  isPlaying = false;
+  if(interpTimer){ clearInterval(interpTimer); interpTimer = null; }
+}
+
+let since = 0;
+async function poll(){
+  try{
+    const r = await fetch(`http://localhost:4747/events?since=${since}&tool=nowplaying`);
+    if(!r.ok){ setTimeout(poll, 3000); return; }
+    const d = await r.json();
+    since = d.latest || since;
+    for(const ev of (d.events || [])){
+      if(ev.type==='nowplaying') update(ev);
+      if(ev.type==='nowplaying_progress'){
+        lastProgress = ev.progress || 0; lastDuration = ev.duration || 1; lastPollMs = Date.now();
+        isPlaying = !!ev.isPlaying;
+        updateFill(ev.progress, ev.duration);
+      }
+      if(ev.type==='nowplaying_stop') hide();
+    }
+  }catch(e){}
+  setTimeout(poll, 100);
+}
+poll();
+</script>
+</body>
+</html>

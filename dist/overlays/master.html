@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SPARK Master Overlay</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:transparent;overflow:hidden}
+
+/* Editor accent — recoloured live from Settings (set_master_border) */
+:root{
+  --acc-border:rgba(255,200,61,.85);
+  --acc-bg:rgba(255,200,61,.25);
+  --acc-text:#ffc83d;
+  --acc-tri:rgba(255,200,61,.9);
+}
+
+.panel{
+  position:fixed;
+  border:2px solid transparent;
+  border-radius:10px;
+  overflow:hidden;
+  display:none;
+  min-width:120px;
+  min-height:80px;
+  transition:border-color .2s ease, box-shadow .2s ease;
+}
+.panel.visible{ display:block; }
+.panel:hover{
+  border-color:var(--acc-border);
+  box-shadow:0 4px 24px rgba(0,0,0,.4);
+}
+
+/* Drag handle bar — only visible on hover so it doesn't clutter the stream */
+.panel-handle{
+  position:absolute;top:0;left:0;right:14px;height:20px;
+  background:var(--acc-bg);
+  cursor:move;z-index:10;
+  display:flex;align-items:center;padding:0 6px;
+  opacity:0;transition:opacity .2s;
+  font-size:.65rem;color:var(--acc-text);letter-spacing:.12em;user-select:none;
+  text-shadow:0 1px 2px rgba(0,0,0,.6);
+  touch-action:none;
+}
+.panel:hover .panel-handle{ opacity:1; }
+
+/* Resize handle — bottom-right corner */
+.panel-resize{
+  position:absolute;bottom:0;right:0;width:18px;height:18px;
+  cursor:se-resize;z-index:10;
+  opacity:0;transition:opacity .2s;
+  touch-action:none;
+}
+.panel:hover .panel-resize{ opacity:1; }
+.panel-resize::after{
+  content:'';position:absolute;bottom:3px;right:3px;
+  width:0;height:0;
+  border-left:9px solid transparent;
+  border-bottom:9px solid var(--acc-tri);
+}
+
+/* While dragging/resizing: iframes must not swallow the pointer, and the
+   panel stays visibly active. */
+body.editing iframe{ pointer-events:none; }
+body.editing{ user-select:none; }
+body.editing .panel.active{ border-color:var(--acc-border); box-shadow:0 4px 24px rgba(0,0,0,.4); }
+body.editing .panel.active .panel-handle,
+body.editing .panel.active .panel-resize{ opacity:1; }
+
+iframe{
+  width:100%;height:100%;
+  border:none;background:transparent;
+  display:block;
+}
+</style>
+</head>
+<body>
+
+<div class="panel" id="panel-wheel" data-tool="wheel">
+  <div class="panel-handle">⠿ WHEEL</div>
+  <iframe data-src="/wheel" allowtransparency="true"></iframe>
+  <div class="panel-resize"></div>
+</div>
+
+<div class="panel" id="panel-giveaway" data-tool="giveaway">
+  <div class="panel-handle">⠿ GIVEAWAY</div>
+  <iframe data-src="/giveaway" allowtransparency="true"></iframe>
+  <div class="panel-resize"></div>
+</div>
+
+<div class="panel" id="panel-timers" data-tool="timers">
+  <div class="panel-handle">⠿ TIMERS</div>
+  <iframe data-src="/timers" allowtransparency="true"></iframe>
+  <div class="panel-resize"></div>
+</div>
+
+<div class="panel" id="panel-tasks" data-tool="tasks">
+  <div class="panel-handle">⠿ TASKS</div>
+  <iframe data-src="/tasks" allowtransparency="true"></iframe>
+  <div class="panel-resize"></div>
+</div>
+
+<div class="panel" id="panel-pomodoro" data-tool="pomodoro">
+  <div class="panel-handle">⠿ POMODORO</div>
+  <iframe data-src="/pomodoro" allowtransparency="true"></iframe>
+  <div class="panel-resize"></div>
+</div>
+
+<div class="panel" id="panel-goals" data-tool="goals">
+  <div class="panel-handle">⠿ GOALS</div>
+  <iframe data-src="/goals" allowtransparency="true"></iframe>
+  <div class="panel-resize"></div>
+</div>
+
+<div class="panel" id="panel-checkins" data-tool="checkins">
+  <div class="panel-handle">⠿ CHECK-INS</div>
+  <iframe data-src="/checkins" allowtransparency="true"></iframe>
+  <div class="panel-resize"></div>
+</div>
+
+<div class="panel" id="panel-nowplaying" data-tool="nowplaying">
+  <div class="panel-handle">⠿ NOW PLAYING</div>
+  <iframe data-src="/nowplaying" allowtransparency="true"></iframe>
+  <div class="panel-resize"></div>
+</div>
+
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+
+// ── Default layouts ────────────────────────────────────────────────────────────
+const DEFAULTS = {
+  wheel:    { x:0,   y:0,   w:600, h:600 },
+  giveaway: { x:0,   y:0,   w:600, h:600 },
+  timers:   { x: window.innerWidth-280, y:20, w:260, h:300 },
+  tasks:    { x:20,  y:20,  w:320, h:400 },
+  pomodoro: { x: window.innerWidth-340, y:340, w:320, h:300 },
+  goals:    { x:20,  y:window.innerHeight-120, w:440, h:80 },
+  checkins:   { x: window.innerWidth-420, y: window.innerHeight-220, w:400, h:200 },
+  nowplaying: { x: 20, y: window.innerHeight-140, w:440, h:120 },
+};
+
+// ── Persist positions to localStorage ─────────────────────────────────────────
+function loadLayouts(){
+  try{ return JSON.parse(localStorage.getItem('spark-master-layouts')||'{}'); }
+  catch(e){ return {}; }
+}
+function saveLayouts(layouts){
+  localStorage.setItem('spark-master-layouts', JSON.stringify(layouts));
+}
+
+// ── Editor accent colour (from Settings) ──────────────────────────────────────
+function hexRgba(hex, a){
+  hex = String(hex||'#ffc83d').replace('#','');
+  if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+  const r=parseInt(hex.substr(0,2),16)||0, g=parseInt(hex.substr(2,2),16)||0, b=parseInt(hex.substr(4,2),16)||0;
+  return `rgba(${r},${g},${b},${a})`;
+}
+function applyAccent(color){
+  if(!color) return;
+  const s = document.documentElement.style;
+  s.setProperty('--acc-border', hexRgba(color,.85));
+  s.setProperty('--acc-bg',     hexRgba(color,.25));
+  s.setProperty('--acc-text',   color);
+  s.setProperty('--acc-tri',    hexRgba(color,.9));
+}
+
+// ── Visibility state (per tool) ────────────────────────────────────────────────
+// All start hidden; the server snapshot restores the saved Settings choices.
+// Hidden panels don't load their iframe at all — no wasted long-polls/CPU.
+const visibility = { wheel:false, giveaway:false, timers:false, tasks:false, pomodoro:false, goals:false, checkins:false, nowplaying:false };
+function applyVisibility(tool, visible){
+  visibility[tool] = visible;
+  const panel = document.getElementById('panel-'+tool);
+  if(!panel) return;
+  panel.classList.toggle('visible', visible);
+  const frame = panel.querySelector('iframe');
+  if(!frame) return;
+  if(visible){
+    if(frame.dataset.loaded !== '1'){ frame.src = frame.dataset.src; frame.dataset.loaded = '1'; }
+  } else if(frame.dataset.loaded === '1'){
+    frame.src = 'about:blank'; frame.dataset.loaded = '';
+  }
+}
+
+// ── Apply layout to a panel ────────────────────────────────────────────────────
+function applyLayout(panel, layout){
+  panel.style.left   = layout.x + 'px';
+  panel.style.top    = layout.y + 'px';
+  panel.style.width  = layout.w + 'px';
+  panel.style.height = layout.h + 'px';
+}
+
+// ── Drag + resize ─────────────────────────────────────────────────────────────
+// Pointer capture: every move/up event is delivered to the handle no matter
+// where the cursor is, so an iframe cannot swallow the mouseup and leave the
+// drag stuck to the cursor. Positions/sizes snap to a 10px grid; hold Shift
+// for free movement.
+const GRID = 10;
+const snap = v => Math.round(v/GRID)*GRID;
+
+function makeEditable(panel, handle, layouts, isResize){
+  handle.addEventListener('pointerdown', e=>{
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    document.body.classList.add('editing');
+    panel.classList.add('active');
+    const startX=e.clientX, startY=e.clientY;
+    const startL=panel.offsetLeft, startT=panel.offsetTop;
+    const startW=panel.offsetWidth, startH=panel.offsetHeight;
+
+    const onMove = ev=>{
+      const free = ev.shiftKey;
+      if(isResize){
+        let w = Math.max(120, startW + ev.clientX - startX);
+        let h = Math.max(80,  startH + ev.clientY - startY);
+        if(!free){ w = snap(w); h = snap(h); }
+        panel.style.width  = w + 'px';
+        panel.style.height = h + 'px';
+      } else {
+        let x = Math.max(0, startL + ev.clientX - startX);
+        let y = Math.max(0, startT + ev.clientY - startY);
+        if(!free){ x = snap(x); y = snap(y); }
+        panel.style.left = x + 'px';
+        panel.style.top  = y + 'px';
+      }
+    };
+    const onUp = ()=>{
+      try{ handle.releasePointerCapture(e.pointerId); }catch(_){}
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+      document.body.classList.remove('editing');
+      panel.classList.remove('active');
+      const tool = panel.dataset.tool;
+      layouts[tool] = layouts[tool]||{...DEFAULTS[tool]};
+      layouts[tool].x = panel.offsetLeft;
+      layouts[tool].y = panel.offsetTop;
+      layouts[tool].w = panel.offsetWidth;
+      layouts[tool].h = panel.offsetHeight;
+      saveLayouts(layouts);
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+const layouts = loadLayouts();
+const panels = document.querySelectorAll('.panel');
+panels.forEach(panel=>{
+  const tool = panel.dataset.tool;
+  const layout = layouts[tool] || DEFAULTS[tool];
+  applyLayout(panel, layout);
+  makeEditable(panel, panel.querySelector('.panel-handle'), layouts, false);
+  makeEditable(panel, panel.querySelector('.panel-resize'), layouts, true);
+});
+
+// Visibility + accent colour from the app
+setTool('master');
+on('visibility', ev=>{
+  if(ev.tool) applyVisibility(ev.tool, !!ev.visible);
+});
+on('master-style', ev=>{
+  applyAccent(ev.borderColor);
+});
+on('_snapshot', s=>{
+  if(!s) return;
+  if(s.borderColor) applyAccent(s.borderColor);
+  if(s.visibility){
+    Object.entries(s.visibility).forEach(([tool, visible])=>{
+      applyVisibility(tool, visible);
+    });
+  }
+});
+
+startPolling();
+</script>
+</body>
+</html>

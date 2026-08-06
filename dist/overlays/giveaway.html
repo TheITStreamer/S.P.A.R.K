@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Giveaway Overlay</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;font-family:Georgia,serif}
+#app{position:fixed;inset:0;opacity:0;transition:opacity .5s ease;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#app.visible{opacity:1}
+#counter{position:fixed;top:20px;right:24px;font-size:1.1rem;color:#fff;background:rgba(0,0,0,.55);padding:8px 16px;border-radius:99px;opacity:0;transition:opacity .3s}
+#counter.show{opacity:1}
+#slotWrap{background:rgba(0,0,0,.7);border:3px solid #ffc83d;border-radius:16px;padding:20px 40px;min-width:340px;text-align:center;overflow:hidden;display:none}
+#slotWrap.show{display:block}
+#slotReel{font-size:2rem;font-weight:800;color:#fff;height:2.6rem;overflow:hidden;position:relative}
+#slotName{position:absolute;width:100%;text-align:center;transition:transform .08s linear}
+#winnerBox{display:none;text-align:center}
+#winnerBox.show{display:block}
+#winnerTitle{font-size:1rem;color:#ffc83d;letter-spacing:.2em;text-transform:uppercase;margin-bottom:8px}
+#winnerName{font-size:3rem;font-weight:800;color:#fff;text-shadow:0 0 30px #ffc83d}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="counter"></div>
+  <div id="slotWrap">
+    <div id="slotReel"><div id="slotName"></div></div>
+  </div>
+  <div id="winnerBox">
+    <div id="winnerTitle">🎉 Winner 🎉</div>
+    <div id="winnerName"></div>
+  </div>
+</div>
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+
+const appEl=document.getElementById('app');
+const counter=document.getElementById('counter');
+const slotWrap=document.getElementById('slotWrap');
+const slotName=document.getElementById('slotName');
+const winnerBox=document.getElementById('winnerBox');
+const winnerName=document.getElementById('winnerName');
+let fadeTimer=null;
+
+setTool('giveaway');
+on('_snapshot',snap=>{
+  if(!snap) return;
+  if(snap.showCount&&snap.entrantCount>0){
+    counter.textContent=snap.entrantCount+' entrant'+(snap.entrantCount!==1?'s':'');
+    counter.classList.toggle('show',snap.open);
+  }
+});
+on('giveaway_state',ev=>{
+  const s=ev.state||{};
+  if(s.showCount){
+    counter.textContent=(s.entrantCount||0)+' entrant'+((s.entrantCount||0)!==1?'s':'');
+    counter.classList.toggle('show',!!s.open);
+  } else {
+    counter.classList.remove('show');
+  }
+});
+on('giveaway_draw',ev=>{
+  if(fadeTimer){clearTimeout(fadeTimer);fadeTimer=null;}
+  const entries=ev.entries||['...'];
+  const winner=ev.winner||'???';
+  // show
+  appEl.classList.add('visible');
+  counter.classList.remove('show');
+  winnerBox.classList.remove('show');
+  slotWrap.classList.add('show');
+  // slot machine animation
+  let speed=60, ticks=0, maxTicks=40;
+  function tick(){
+    slotName.textContent=entries[Math.floor(Math.random()*entries.length)];
+    ticks++;
+    if(ticks<maxTicks){
+      if(ticks>25) speed+=15;
+      setTimeout(tick,speed);
+    } else {
+      slotName.textContent=winner;
+      setTimeout(()=>{
+        slotWrap.classList.remove('show');
+        winnerName.textContent=winner;
+        winnerBox.classList.add('show');
+        fadeTimer=setTimeout(()=>{
+          winnerBox.classList.remove('show');
+          appEl.classList.remove('visible');
+        },(ev.winner_seconds||8)*1000);
+      },1200);
+    }
+  }
+  tick();
+});
+
+startPolling();
+</script>
+</body>
+</html>

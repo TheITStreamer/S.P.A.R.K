@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Goals Overlay</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}
+#goalStack{position:fixed;bottom:20px;left:20px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.gw{opacity:0;transition:opacity .4s ease}
+.gw.show{opacity:1}
+.emoji-rain{position:fixed;top:0;left:0;right:0;bottom:0;pointer-events:none;overflow:hidden}
+.ep{position:absolute;animation:fall linear forwards;top:-60px;font-size:2rem}
+@keyframes fall{0%{opacity:1;transform:translateY(0) rotate(0)}80%{opacity:1}100%{opacity:0;transform:translateY(110vh) rotate(720deg)}}
+</style>
+</head>
+<body>
+<div id="goalStack"></div>
+<div id="emojiRain" class="emoji-rain"></div>
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+import { drawGoalBar, loadGoogleFont } from '/js/bar-renderer.js';
+
+const stack=document.getElementById('goalStack');
+const rain=document.getElementById('emojiRain');
+const wraps={};
+const DEFAULT_EMOJIS=['🎉','🎊','✨','🥳','⭐','🎈','🎆','🎇'];
+
+function renderBars(goals){
+  if(!goals?.length){ stack.innerHTML=''; return; }
+  const active=goals.filter(b=>b.active);
+  Object.keys(wraps).forEach(id=>{ if(!active.find(b=>b.id===id)){ wraps[id]?.remove(); delete wraps[id]; }});
+  active.forEach(b=>{
+    loadGoogleFont(b.font);
+    const isV=b.orientation==='v';
+    // On overlay use configured size
+    const cw=isV?(b.height||80):(b.width||400);
+    const ch=isV?(b.width||300):(b.height||80);
+    if(!wraps[b.id]){
+      const wrap=document.createElement('div');
+      wrap.className='gw'; wrap.dataset.id=b.id;
+      const canvas=document.createElement('canvas');
+      canvas.width=cw; canvas.height=ch;
+      wrap.appendChild(canvas); stack.appendChild(wrap);
+      wraps[b.id]=wrap;
+      requestAnimationFrame(()=>wrap.classList.add('show'));
+    }
+    const canvas=wraps[b.id].querySelector('canvas');
+    canvas.width=cw; canvas.height=ch;
+    drawGoalBar(canvas.getContext('2d'),cw,ch,b);
+    if(b._celebrate) celebrate(b._emojis||DEFAULT_EMOJIS);
+  });
+}
+
+function celebrate(emojis){
+  for(let i=0;i<40;i++){
+    setTimeout(()=>{
+      const span=document.createElement('span');
+      span.className='ep';
+      const e=emojis[Math.floor(Math.random()*emojis.length)];
+      if(e?.startsWith('http')){
+        const img=document.createElement('img'); img.src=e; img.style.cssText='width:32px;height:32px';
+        span.style.fontSize='0'; span.appendChild(img);
+      } else { span.textContent=e||'🎉'; }
+      span.style.left=Math.random()*100+'vw';
+      const dur=2+Math.random()*2;
+      span.style.animationDuration=dur+'s';
+      rain.appendChild(span);
+      setTimeout(()=>span.remove(),(dur+.5)*1000);
+    },i*80);
+  }
+}
+
+setTool('goals');
+on('_snapshot',snap=>{ if(Array.isArray(snap)) renderBars(snap); });
+on('goals_state',ev=>renderBars(ev.goals));
+startPolling();
+</script>
+</body>
+</html>

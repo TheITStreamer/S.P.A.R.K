@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SPARK - Commands Popup</title>
+<style>
+  /* Overlay pages are always transparent — OBS composites them over the scene. */
+  html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden;
+            font-family:'Segoe UI',system-ui,sans-serif}
+  #stage{position:relative;width:100%;height:100%}
+
+  /* padding is set inline per popup so it can be dialled to 0 for a border
+     that sits snug against the image. */
+  .pop{position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;
+       gap:10px;border-radius:14px;max-width:70vw;box-sizing:border-box;line-height:0}
+  .pop .txt{line-height:1.3}
+  /* Exact-coordinate popups are centred on their x/y, which is what people
+     expect when typing "50% / 50%". The translate is applied inline so it can
+     coexist with the anchor classes' own transforms. */
+  .pop.exact{max-width:none}
+  .pop img{object-fit:contain;display:block}
+  .pop .txt{text-align:center;line-height:1.3;white-space:pre-wrap;word-break:break-word}
+
+  /* Nine anchors, matching the Check-ins tab's position options. */
+  .p-tl{top:40px;left:40px}      .p-tc{top:40px;left:50%;transform:translateX(-50%)}      .p-tr{top:40px;right:40px}
+  .p-ml{top:50%;left:40px;transform:translateY(-50%)}
+  .p-mc{top:50%;left:50%;transform:translate(-50%,-50%)}
+  .p-mr{top:50%;right:40px;transform:translateY(-50%)}
+  .p-bl{bottom:40px;left:40px}   .p-bc{bottom:40px;left:50%;transform:translateX(-50%)}   .p-br{bottom:40px;right:40px}
+
+  /* Entry animations. Each pairs with a matching exit so the popup never just
+     vanishes mid-frame. Centre-anchored positions need their translate
+     preserved inside the keyframes or they jump on animation start. */
+  @keyframes popIn   {from{opacity:0;scale:.7}   to{opacity:1;scale:1}}
+  @keyframes popOut  {from{opacity:1;scale:1}    to{opacity:0;scale:.7}}
+  @keyframes fadeIn  {from{opacity:0}            to{opacity:1}}
+  @keyframes fadeOut {from{opacity:1}            to{opacity:0}}
+  @keyframes slideIn {from{opacity:0;translate:0 30px} to{opacity:1;translate:0 0}}
+  @keyframes slideOut{from{opacity:1;translate:0 0}    to{opacity:0;translate:0 30px}}
+
+  .a-pop.in    {animation:popIn   .35s cubic-bezier(.2,1.5,.4,1) both}
+  .a-pop.out   {animation:popOut  .3s  ease-in both}
+  .a-fade.in   {animation:fadeIn  .35s ease-out both}
+  .a-fade.out  {animation:fadeOut .3s  ease-in both}
+  .a-slide.in  {animation:slideIn .35s cubic-bezier(.2,1.2,.4,1) both}
+  .a-slide.out {animation:slideOut.3s  ease-in both}
+  .a-none.in, .a-none.out{animation:none}
+
+  /* Text effects. Each reveals the text a piece at a time; the pieces are
+     spans the script creates, so the effect is independent of the box's own
+     entry animation above. */
+  .tw-caret::after{content:'▌';opacity:.85;animation:caretBlink 1s steps(1) infinite}
+  @keyframes caretBlink{50%{opacity:0}}
+
+  .piece{display:inline-block;white-space:pre}
+  @keyframes wordIn  {from{opacity:0;translate:0 .35em} to{opacity:1;translate:0 0}}
+  @keyframes letterIn{from{opacity:0;scale:.2}          to{opacity:1;scale:1}}
+  .e-words .piece  {animation:wordIn   .28s ease-out both}
+  .e-letters .piece{animation:letterIn .3s cubic-bezier(.2,1.6,.4,1) both}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+
+const stage = document.getElementById('stage');
+
+const POS = {
+  'top-left':'p-tl','top-center':'p-tc','top-right':'p-tr',
+  'middle-left':'p-ml','middle-center':'p-mc','middle-right':'p-mr',
+  'bottom-left':'p-bl','bottom-center':'p-bc','bottom-right':'p-br',
+};
+
+// Popups are transient by nature, but a spammed command could still stack
+// dozens on screen. Oldest is retired once there are more than five.
+const MAX_ON_SCREEN = 5;
+const live = [];
+
+function retire(el){
+  if(!el || el.dataset.going) return;
+  el.dataset.going = '1';
+  el.classList.remove('in');
+  el.classList.add('out');
+  // Matches the longest exit animation above; the element is removed either way.
+  setTimeout(()=>el.remove(), 320);
+  const i = live.indexOf(el);
+  if(i >= 0) live.splice(i, 1);
+}
+
+function showPopup(ev){
+  const el = document.createElement('div');
+  const exact = ev.posMode === 'exact';
+
+  el.className = 'pop ' + (exact ? 'exact' : (POS[ev.position] || 'p-mc'))
+               + ' a-' + (ev.anim || 'pop') + ' in';
+
+  if(exact){
+    const xu = ev.xUnit === 'px' ? 'px' : '%';
+    const yu = ev.yUnit === 'px' ? 'px' : '%';
+    el.style.left = (ev.x == null ? 50 : ev.x) + xu;
+    el.style.top  = (ev.y == null ? 50 : ev.y) + yu;
+    // Centre the box on the given point rather than hanging it off the
+    // top-left corner — matches how people think about placement.
+    el.style.transform = 'translate(-50%,-50%)';
+    if(ev.w) el.style.width  = ev.w + (ev.wUnit === '%' ? '%' : 'px');
+    if(ev.h) el.style.height = ev.h + (ev.hUnit === '%' ? '%' : 'px');
+  }
+
+  // Colours come through as plain hex. Empty means "none" — bg:'' is a bare
+  // popup with no plate, border:'' has no outline.
+  if(ev.bg) el.style.background = ev.bg;
+  if(ev.border) el.style.border = '2px solid ' + ev.border;
+  if(ev.glow) el.style.boxShadow = '0 0 24px ' + (ev.border || ev.bg || '#000');
+
+  // Space between the content and the edge/border. 0 makes the border sit
+  // snug against the image, which is the whole reason this is adjustable.
+  const pad = ev.pad == null ? 18 : ev.pad;
+  el.style.padding = pad + 'px';
+  if(pad === 0) el.style.gap = '0px';
+
+  if(ev.image){
+    const img = document.createElement('img');
+    const cap = ev.imageSize || 340;
+    img.style.maxWidth = cap + 'px';
+    img.style.maxHeight = cap + 'px';
+    // Either a /commands/image lookup URL (with a version stamp so a swapped
+    // file isn't served from cache) or a plain remote URL.
+    img.src = ev.image;
+    img.onerror = () => img.remove();
+    el.appendChild(img);
+  }
+
+  // How long the reveal takes. The hold time starts AFTER this, so setting
+  // "5 seconds on screen" always means five seconds of actually reading it,
+  // however slowly it typed itself out.
+  let effectMs = 0;
+
+  if(ev.text){
+    const t = document.createElement('div');
+    t.className = 'txt';
+    t.style.color = ev.color || '#ffffff';
+    t.style.fontSize = (ev.size || 34) + 'px';
+    t.style.fontWeight = ev.weight || 700;
+    if(ev.font) t.style.fontFamily = "'" + ev.font + "', 'Segoe UI', sans-serif";
+    if(ev.shadow) t.style.textShadow = '0 2px 8px rgba(0,0,0,.85)';
+
+    const effect = ev.textEffect || 'none';
+    const step = Math.max(5, ev.effectSpeed || 40);
+
+    if(effect === 'typewriter'){
+      // Reserve the final size first so the box doesn't grow as it types —
+      // a popup that reflows while typing looks broken.
+      t.textContent = ev.text;
+      el.appendChild(t);
+      requestAnimationFrame(() => {
+        const rect = t.getBoundingClientRect();
+        t.style.minWidth  = rect.width + 'px';
+        t.style.minHeight = rect.height + 'px';
+        t.textContent = '';
+        t.classList.add('tw-caret');
+        let i = 0;
+        const chars = [...ev.text];
+        const tick = () => {
+          if(!t.isConnected) return;
+          t.textContent = chars.slice(0, ++i).join('');
+          if(i < chars.length) setTimeout(tick, step);
+          else t.classList.remove('tw-caret');
+        };
+        tick();
+      });
+      effectMs = [...ev.text].length * step;
+    }
+    else if(effect === 'words' || effect === 'letters'){
+      t.classList.add(effect === 'words' ? 'e-words' : 'e-letters');
+      // Split into spans. textContent per piece, never innerHTML — the string
+      // can contain viewer-typed {args}.
+      const parts = effect === 'words' ? ev.text.split(/(\s+)/) : [...ev.text];
+      let shown = 0;
+      parts.forEach(p => {
+        const s = document.createElement('span');
+        s.className = 'piece';
+        s.textContent = p;
+        if(p.trim()) s.style.animationDelay = (shown++ * step) + 'ms';
+        t.appendChild(s);
+      });
+      effectMs = shown * step;
+      el.appendChild(t);
+    }
+    else {
+      t.textContent = ev.text;
+      el.appendChild(t);
+    }
+  }
+
+  stage.appendChild(el);
+  live.push(el);
+  while(live.length > MAX_ON_SCREEN) retire(live[0]);
+
+  const ms = Math.max(500, (ev.duration || 5) * 1000) + effectMs;
+  setTimeout(()=>retire(el), ms);
+}
+
+function loadFont(name){
+  if(!name || name === 'Segoe UI') return;
+  const id = 'gf-' + name.replace(/\W+/g,'');
+  if(document.getElementById(id)) return;
+  const l = document.createElement('link');
+  l.id = id; l.rel = 'stylesheet';
+  l.href = 'https://fonts.googleapis.com/css2?family=' + name.replace(/ /g,'+') + ':wght@400;700;800&display=swap';
+  document.head.appendChild(l);
+}
+
+on('popup', ev => { loadFont(ev.font); showPopup(ev); });
+on('popup_clear', () => { [...live].forEach(retire); });
+
+setTool('commands');
+startPolling();
+</script>
+</body>
+</html>

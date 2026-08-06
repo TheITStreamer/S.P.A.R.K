@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S.P.A.R.K.</title>
+<script>
+/* Applied before the first paint. SPARK's data file is read asynchronously, so
+   without this cached copy the window shows the default purple for a moment and
+   then snaps to the real theme. Settings remains the source of truth and
+   rewrites this on every change. */
+try{
+  var t = localStorage.getItem('spark_theme');
+  if(t && t !== 'purple') document.documentElement.setAttribute('data-theme', t);
+}catch(e){}
+</script>
+<style>
+/* ── Themes ─────────────────────────────────────────────────────────────────
+   Every theme sets the same names, so nothing else in the app needs to know
+   which one is active. Names are semantic rather than literal: --gold-ink is
+   "gold used as text" and is NOT always the same as --gold, because bright
+   gold on a light background sits near 1.7:1 contrast and cannot be read.
+   --gold stays the button and tag fill, where the text on top is dark.
+
+   --shade / --shade2 are subtle washes over a panel. A white wash at low alpha
+   disappears on a light base, so each theme sets them explicitly.
+   --scrim is the modal backdrop and stays black everywhere: it works over any
+   base and is meant to darken whatever is behind it.
+
+   Overlays are deliberately untouched by all of this. Those are designs the
+   streamer built to go out on stream, not app chrome.                        */
+:root{
+  --bg:#1b1530;--panel:#262040;--panel2:#2e2750;--ink:#f5f1ff;--muted:#a79fc7;
+  --gold:#ffc83d;--gold-ink:#ffc83d;--accent:#ff5d73;--twitch:#9146FF;
+  --green:#3ddc97;--line:#3a315e;--blue:#4cc3ff;--orange:#ff9f43;
+  --header:linear-gradient(135deg,#2c2350,#1b1530);
+  --tabbar:#160f2a;--code-bg:#0d0a1e;--input-bg:#1b1530;--input-line:#3a3260;
+  --shade:rgba(255,255,255,.03);--shade2:rgba(255,255,255,.06);
+  --sunken:rgba(0,0,0,.2);--scrim:rgba(0,0,0,.75);
+  --btn:#4a3f7d;--btn-line:#3a315e;--row-line:#322a55;
+  --ok-bg:#2a5c2a;--ok-ink:#caffbf;--warn-bg:#5a2b3d;--warn-ink:#ffadad;
+  --on-gold:#2b1d00;--on-btn:#ffffff;
+}
+html[data-theme="ocean"]{
+  --bg:#0f1826;--panel:#182437;--panel2:#1f2e45;--ink:#eef4ff;--muted:#8fa5c2;
+  --line:#2a3b56;
+  --header:linear-gradient(135deg,#1d2c44,#0f1826);
+  --tabbar:#0b1320;--code-bg:#070d16;--input-bg:#0f1826;--input-line:#2a3b56;
+  --btn:#2f4a6d;--btn-line:#2a3b56;--row-line:#22314a;
+  --ok-bg:#1f4a3a;--ok-ink:#bdf5dd;--warn-bg:#4a2b38;--warn-ink:#ffb8c4;
+}
+html[data-theme="charcoal"]{
+  --bg:#16181c;--panel:#1f2227;--panel2:#282c33;--ink:#f0f1f3;--muted:#9aa1ac;
+  --line:#363b44;
+  --header:linear-gradient(135deg,#252930,#16181c);
+  --tabbar:#101215;--code-bg:#0c0e11;--input-bg:#16181c;--input-line:#363b44;
+  --btn:#3d434d;--btn-line:#363b44;--row-line:#2b3038;
+  --ok-bg:#28442c;--ok-ink:#c8f0cc;--warn-bg:#4a2f32;--warn-ink:#ffbcc0;
+}
+html[data-theme="forest"]{
+  --bg:#101c17;--panel:#182821;--panel2:#1f342b;--ink:#eef6f1;--muted:#8fb3a2;
+  --line:#2a463a;
+  --header:linear-gradient(135deg,#1d3529,#101c17);
+  --tabbar:#0b1511;--code-bg:#08110d;--input-bg:#101c17;--input-line:#2a463a;
+  --btn:#2f5443;--btn-line:#2a463a;--row-line:#223a30;
+  --ok-bg:#1f4a30;--ok-ink:#c4f3d4;--warn-bg:#4a3029;--warn-ink:#ffc2b4;
+}
+html[data-theme="ember"]{
+  --bg:#1c1214;--panel:#28191c;--panel2:#332024;--ink:#fdf0f1;--muted:#c29aa1;
+  --line:#4a2c31;
+  --header:linear-gradient(135deg,#332024,#1c1214);
+  --tabbar:#150d0f;--code-bg:#100a0b;--input-bg:#1c1214;--input-line:#4a2c31;
+  --btn:#5c3a40;--btn-line:#4a2c31;--row-line:#3a2327;
+  --ok-bg:#3a4a2a;--ok-ink:#e0f5bf;--warn-bg:#5c2f36;--warn-ink:#ffb3bd;
+}
+/* Light needs more than swapped values. Gold is used as text in a dozen places
+   and is illegible on white, so --gold-ink darkens to an amber that clears 4.5:1
+   while --gold stays bright for fills. The washes flip from white to black. */
+html[data-theme="light"]{
+  --bg:#eceef2;--panel:#ffffff;--panel2:#f2f4f8;--ink:#1a1c22;--muted:#5c6270;
+  --gold:#ffc83d;--gold-ink:#7a5200;--accent:#c62b45;--green:#1f7a4d;
+  --line:#d3d7e0;--blue:#1c6ea8;--orange:#a85a08;
+  --header:linear-gradient(135deg,#ffffff,#e6e9ef);
+  --tabbar:#e2e5ec;--code-bg:#e6e9ef;--input-bg:#ffffff;--input-line:#c9cedb;
+  --shade:rgba(0,0,0,.035);--shade2:rgba(0,0,0,.07);
+  --sunken:rgba(0,0,0,.05);
+  --btn:#5a5f6e;--btn-line:#c9cedb;--row-line:#e2e5ec;
+  --ok-bg:#d6f0d9;--ok-ink:#14532d;--warn-bg:#fbdde1;--warn-ink:#8a122e;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{background:var(--bg);color:var(--ink);font-family:'Segoe UI',system-ui,sans-serif;display:flex;flex-direction:column}
+
+/* Header */
+#header{display:flex;align-items:center;gap:16px;padding:10px 20px;background:var(--header);border-bottom:1px solid var(--line);flex-shrink:0}
+#logo{font-size:1.25rem;font-weight:800;letter-spacing:.14em;color:var(--gold-ink);font-family:Georgia,serif}
+#logo span{color:var(--muted);font-weight:400;font-size:.72rem;letter-spacing:.18em;margin-left:10px}
+#twStatusBar{display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--muted);margin-left:auto}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0}
+.dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}
+.dot.wait{background:var(--gold)}
+.dot.err{background:var(--accent)}
+
+/* Tabs */
+#tabs{
+  display:flex;gap:0;padding:0;background:var(--tabbar);
+  border-bottom:1px solid var(--line);flex-shrink:0;
+  position:relative;overflow:visible;
+}
+.tab{
+  display:flex;align-items:center;gap:7px;
+  padding:10px 18px;cursor:pointer;font-size:.82rem;font-weight:700;
+  color:var(--muted);border-bottom:2px solid transparent;
+  letter-spacing:.04em;text-transform:uppercase;
+  transition:color .15s,border-color .15s,background .15s;user-select:none;
+  white-space:nowrap;flex-shrink:0;
+}
+.tab:hover{color:var(--ink);background:var(--shade)}
+.tab.active{color:var(--gold-ink);border-bottom-color:var(--gold-ink)}
+.tab svg{width:15px;height:15px;flex-shrink:0;opacity:.7}
+.tab.active svg{opacity:1}
+/* Hidden by the overflow reflow. Kept out of layout entirely so the measure
+   pass and the paint agree on what fits. */
+.tab.tab-overflowed{display:none}
+
+/* ── Tab overflow ───────────────────────────────────────────────────────────
+   Tabs that no longer fit collapse into this button's dropdown. The button
+   itself only exists in layout while something is actually overflowing. */
+#tabOverflowWrap{position:relative;flex-shrink:0;display:none}
+#tabOverflowWrap.on{display:block}
+#tabOverflowBtn{
+  display:flex;align-items:center;gap:7px;height:100%;
+  padding:10px 14px;cursor:pointer;font-size:.82rem;font-weight:700;
+  color:var(--muted);border-bottom:2px solid transparent;background:none;
+  border-top:0;border-left:0;border-right:0;
+  letter-spacing:.04em;text-transform:uppercase;
+  font-family:inherit;white-space:nowrap;user-select:none;
+  transition:color .15s,border-color .15s,background .15s;
+}
+#tabOverflowBtn:hover{color:var(--ink);background:var(--shade)}
+#tabOverflowBtn.active{color:var(--gold-ink);border-bottom-color:var(--gold-ink)}
+#tabOverflowBtn .chev{font-size:1.05rem;line-height:1;letter-spacing:0}
+#tabOverflowMenu{
+  display:none;position:absolute;top:100%;right:0;z-index:400;
+  min-width:190px;padding:5px;
+  background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  box-shadow:0 10px 28px rgba(0,0,0,.42);
+}
+#tabOverflowMenu.open{display:block}
+.tab-of-item{
+  display:flex;align-items:center;gap:9px;width:100%;
+  padding:9px 11px;border-radius:6px;cursor:pointer;
+  font-size:.8rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted);user-select:none;
+}
+.tab-of-item:hover{background:var(--shade2);color:var(--ink)}
+.tab-of-item.active{color:var(--gold-ink)}
+.tab-of-item svg{width:15px;height:15px;flex-shrink:0;opacity:.75}
+
+/* ── Disabled-tool banner ───────────────────────────────────────────────────
+   One strip for the whole app rather than one per pane: .tab-pane is a flex
+   container with its own split layout, and injecting a child into each would
+   fight those layouts in twelve different places. */
+#tabDisabledBanner{
+  display:none;align-items:center;gap:10px;flex-shrink:0;
+  padding:8px 16px;font-size:.8rem;
+  background:var(--warn-bg);color:var(--warn-ink);
+  border-bottom:1px solid var(--line);
+}
+#tabDisabledBanner.on{display:flex}
+#tabDisabledBanner svg{width:15px;height:15px;flex-shrink:0}
+#tabDisabledBanner .msg{flex:1;min-width:0}
+#tabDisabledBanner .msg b{font-weight:700}
+#tabDisabledBannerOn{
+  flex-shrink:0;padding:4px 12px;border-radius:5px;cursor:pointer;
+  font:inherit;font-size:.75rem;font-weight:700;letter-spacing:.03em;
+  text-transform:uppercase;
+  background:var(--gold);color:var(--on-gold);border:0;
+}
+#tabDisabledBannerOn:hover{filter:brightness(1.08)}
+/* Matching marker on the Settings tool rows so the two views agree. */
+.tool-off-pill{
+  display:inline-block;margin-left:8px;padding:1px 7px;border-radius:9px;
+  font-size:.62rem;font-weight:800;letter-spacing:.08em;vertical-align:middle;
+  background:var(--warn-bg);color:var(--warn-ink);
+}
+
+/* Content */
+#content{flex:1;overflow:hidden;display:flex}
+.tab-pane{display:none;flex:1;overflow:hidden}
+.tab-pane.active{display:flex}
+
+/* Layout */
+.split{display:flex;flex:1;overflow:hidden}
+.left-col{width:600px;flex-shrink:0;overflow-y:auto;padding:16px;border-right:1px solid var(--line)}
+.right-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px;position:relative;overflow:hidden;background:var(--sunken)}
+.full-col{flex:1;overflow-y:auto;padding:16px}
+/* Commands uses the whole pane (no preview column) with its own internal
+   scrolling, so it needs a flex column rather than .full-col's single scroller. */
+.cmd-full{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.cmd-full .cmd-body{flex:1;display:flex;flex-direction:column;overflow:hidden;padding:0 16px 16px}
+
+/* Cards */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
+.card h2{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+
+/* Forms */
+label{display:block;color:var(--muted);font-size:.8rem;margin-bottom:5px}
+input[type=text],input[type=password],input[type=number],textarea,select{
+  width:100%;background:var(--input-bg);color:var(--ink);border:1px solid var(--line);
+  border-radius:8px;padding:8px 11px;font-size:.88rem;font-family:inherit;
+}
+textarea{resize:vertical;height:110px}
+select{cursor:pointer}
+.row{display:flex;gap:8px;align-items:center}
+.mt{margin-top:10px}
+.mb{margin-bottom:10px}
+
+/* Buttons */
+button{font-family:inherit;cursor:pointer;border:none;border-radius:8px;font-size:.85rem;font-weight:600;padding:8px 14px;color:var(--on-btn);background:var(--btn);transition:transform .1s,filter .1s}
+button:hover{transform:translateY(-1px);filter:brightness(1.12)}
+button:active{transform:translateY(1px)}
+button:disabled{opacity:.4;cursor:not-allowed;transform:none;filter:none}
+.btn-gold{background:var(--gold);color:var(--on-gold)}
+.btn-accent{background:var(--accent)}
+.btn-twitch{background:var(--twitch)}
+.btn-green{background:var(--ok-bg);color:var(--ok-ink)}
+.btn-ghost{background:transparent;border:1px solid var(--line);color:var(--muted)}
+.btn-sm{padding:6px 10px;font-size:.78rem}
+.btn-danger{background:var(--warn-bg)}
+.full{width:100%}
+
+/* Checkboxes */
+.checkrow{display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--ink);cursor:pointer;margin-top:8px}
+.checkrow input[type=checkbox]{width:15px;height:15px;accent-color:var(--gold-ink)}
+
+/* Misc */
+.hint{color:var(--muted);font-size:.76rem;line-height:1.5;margin-top:6px}
+.warn{color:var(--accent);font-size:.78rem;margin-top:6px}
+.ok{color:var(--green);font-size:.78rem;margin-top:6px}
+.tag{font-size:.68rem;background:var(--panel2);border:1px solid var(--line);color:var(--muted);padding:2px 7px;border-radius:99px}
+code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:.8rem;color:var(--gold-ink)}
+.spacer{flex:1}
+details summary{cursor:pointer;color:var(--muted);font-size:.82rem;margin-bottom:8px}
+.link{color:var(--gold-ink);cursor:pointer;text-decoration:underline}
+.sep{border:none;border-top:1px solid var(--line);margin:12px 0}
+
+/* Help button */
+.help-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  background:transparent;border:1px solid var(--line);color:var(--muted);
+  font-size:.75rem;font-weight:600;padding:5px 10px;border-radius:7px;
+  letter-spacing:.06em;text-transform:uppercase;
+  transition:color .15s,border-color .15s;
+}
+.help-btn:hover{color:var(--ink);border-color:var(--muted);transform:none;filter:none}
+
+/* Help modal */
+#helpModal{
+  display:none;position:fixed;inset:0;z-index:999;
+  background:var(--scrim);backdrop-filter:blur(4px);
+  align-items:center;justify-content:center;
+}
+#helpModal.open{display:flex}
+#helpBox{
+  background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  width:min(520px,92vw);max-height:80vh;display:flex;flex-direction:column;
+  box-shadow:0 24px 60px rgba(0,0,0,.6);
+}
+#helpBoxHead{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px 12px;border-bottom:1px solid var(--line);flex-shrink:0;
+}
+#helpBoxTitle{
+  font-size:.72rem;font-weight:800;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--gold-ink);display:flex;align-items:center;gap:8px;
+}
+#helpBoxTitle svg{width:15px;height:15px;opacity:.8}
+#helpBoxClose{
+  background:transparent;border:none;color:var(--muted);font-size:1.2rem;
+  padding:0 4px;line-height:1;cursor:pointer;transition:color .15s;
+}
+#helpBoxClose:hover{color:var(--ink);transform:none;filter:none}
+#helpBoxBody{
+  overflow-y:auto;padding:18px 20px 20px;font-size:.85rem;line-height:1.65;
+  color:var(--ink);
+}
+#helpBoxBody h3{
+  font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);
+  font-weight:700;margin:16px 0 7px;
+}
+#helpBoxBody h3:first-child{margin-top:0}
+#helpBoxBody p{margin-bottom:8px;color:var(--muted)}
+#helpBoxBody p strong{color:var(--ink)}
+#helpBoxBody code{background:var(--code-bg);padding:2px 7px;border-radius:5px;font-size:.8rem;color:var(--gold-ink)}
+#helpBoxBody ul{padding-left:18px;margin-bottom:8px}
+#helpBoxBody ul li{color:var(--muted);margin-bottom:4px}
+#helpBoxBody ul li strong{color:var(--ink)}
+
+/* Left column wrapper */
+.left-wrap{width:600px;flex-shrink:0;border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+.left-wrap.narrow{width:400px}
+.left-wrap.narrow .left-col{width:400px}
+.left-wrap .left-col{border-right:none;flex:1;min-height:0}
+.help-bar{padding:10px 16px 4px;flex-shrink:0}
+
+/* Overlay bar */
+.overlay-bar{position:absolute;bottom:12px;left:0;right:0;display:flex;justify-content:center;gap:8px;align-items:center;font-size:.75rem;color:var(--muted)}
+.overlay-bar input{width:210px;font-size:.75rem;background:var(--code-bg)}
+.overlay-toggle{display:flex;gap:6px;align-items:center;font-size:.75rem;color:var(--muted)}
+.overlay-toggle select{width:auto;font-size:.75rem;padding:4px 8px}
+
+/* Preview right column header */
+.preview-header{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:16px;align-self:flex-start}
+
+/* Wheel */
+#wheelWinner{font-size:2rem;font-weight:800;color:var(--gold-ink);text-align:center;font-family:Georgia,serif;min-height:56px;display:flex;align-items:center;justify-content:center;margin-bottom:8px}
+#wheelWinner small{display:block;font-size:.8rem;color:var(--muted);font-weight:400}
+#wPointer{position:absolute;left:50%;transform:translateX(-50%);width:0;height:0;border-left:16px solid transparent;border-right:16px solid transparent;border-top:26px solid var(--gold);filter:drop-shadow(0 3px 4px rgba(0,0,0,.5));z-index:2}
+.wheel-wrap{position:relative}
+#wCanvas{display:block;filter:drop-shadow(0 12px 30px rgba(0,0,0,.55))}
+#wSpinBtn{margin-top:16px;background:var(--accent);font-size:1.1rem;padding:11px 38px;border-radius:999px;box-shadow:0 6px 20px rgba(255,93,115,.4);font-family:Georgia,serif;font-weight:700}
+
+/* Item list */
+.item-row{display:flex;align-items:center;gap:7px;padding:5px 0;border-bottom:1px solid var(--row-line)}
+.item-row:last-child{border-bottom:none}
+.item-row.drag-over{background:var(--line);border-radius:6px}
+.drag-handle{color:var(--muted);cursor:grab;font-size:1rem;flex-shrink:0;user-select:none;padding:0 2px}
+.swatch{width:12px;height:12px;border-radius:3px;flex-shrink:0}
+.item-name{flex:1;font-size:.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pct{color:var(--muted);font-size:.75rem;width:48px;text-align:right;flex-shrink:0}
+.mini{width:26px;height:26px;padding:0;border-radius:6px;font-size:1rem;line-height:1;flex-shrink:0;background:var(--btn)}
+.mini.del{background:var(--warn-bg)}
+
+/* Giveaway */
+#gaEntrantList{max-height:220px;overflow-y:auto;margin-top:8px}
+.entrant-row{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--row-line);font-size:.85rem}
+.entrant-row:last-child{border-bottom:none}
+.entrant-count{color:var(--gold-ink);font-size:.75rem;width:24px;text-align:center}
+.btn-open{background:var(--ok-bg);color:var(--ok-ink)}
+.btn-close{background:var(--warn-bg);color:var(--warn-ink)}
+.status-pill{padding:3px 10px;border-radius:99px;font-size:.75rem;font-weight:700}
+.pill-open{background:var(--ok-bg);color:var(--ok-ink)}
+.pill-closed{background:var(--warn-bg);color:var(--warn-ink)}
+
+/* Giveaway preview */
+#gaPreview{width:100%;max-width:440px;background:var(--sunken);border:1px solid var(--line);border-radius:14px;padding:20px;text-align:center}
+#gaPreviewStatus{font-size:.75rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
+#gaPreviewCount{font-size:3rem;font-weight:800;color:var(--gold-ink);font-family:Georgia,serif;line-height:1}
+#gaPreviewLabel{font-size:.85rem;color:var(--muted);margin-top:4px}
+#gaPreviewWinner{font-size:1.4rem;font-weight:800;color:var(--gold-ink);margin-top:16px;min-height:40px;font-family:Georgia,serif}
+
+/* Timers preview */
+#tmPreview{width:100%;max-width:360px;display:flex;flex-direction:column;gap:12px}
+.tm-preview-card{background:var(--sunken);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+.tm-preview-name{font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.tm-preview-time{font-size:2.8rem;font-weight:700;line-height:1;color:var(--gold-ink)}
+.tm-preview-state{font-size:.72rem;color:var(--muted);margin-top:4px}
+
+/* Tasks preview */
+#tkPreview{width:100%;max-width:380px}
+#tkPreviewList{background:var(--sunken);border:1px solid var(--line);border-radius:12px;padding:14px 16px;min-height:120px}
+.tk-prev-row{display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--shade2);font-size:.88rem}
+.tk-prev-row:last-child{border-bottom:none}
+.tk-prev-num{color:var(--muted);width:20px;flex-shrink:0;font-size:.78rem}
+.tk-prev-user{color:var(--gold-ink);font-size:.75rem;flex-shrink:0}
+.tk-prev-text{flex:1}
+.tk-prev-done .tk-prev-text{text-decoration:line-through;opacity:.45}
+
+/* Goals preview */
+#goPreview{width:100%;max-width:480px;display:flex;flex-direction:column;gap:12px;padding:8px 0}
+
+/* Goals card */
+.goal-card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
+.goal-card-header{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;overflow:hidden}
+.goal-name{font-weight:700;flex:1;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+button.del{background:var(--warn-bg)}
+
+/* Chat overlay preview — checkerboard shows through transparent backgrounds */
+.transparency-grid{
+  background-color:var(--panel2);
+  background-image:
+    linear-gradient(45deg,var(--input-line) 25%,transparent 25%),
+    linear-gradient(-45deg,var(--input-line) 25%,transparent 25%),
+    linear-gradient(45deg,transparent 75%,var(--input-line) 75%),
+    linear-gradient(-45deg,transparent 75%,var(--input-line) 75%);
+  background-size:20px 20px;
+  background-position:0 0,0 10px,10px -10px,-10px 0px;
+}
+
+::-webkit-scrollbar{width:8px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div id="logo">S.P.A.R.K. <span>Streaming Panel for Alerts, Redeems and Key tools</span></div>
+  <div id="twStatusBar"><span class="dot" id="twDotHeader"></span><span id="twStatusHeader">Not connected</span></div>
+</div>
+
+<div id="tabs">
+  <div class="tab active" data-tab="wheel">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+    Wheel
+  </div>
+  <div class="tab" data-tab="giveaway">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 12 20 22 4 22 4 12"/><rect x="2" y="7" width="20" height="5"/><line x1="12" y1="22" x2="12" y2="7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/></svg>
+    Giveaway
+  </div>
+  <div class="tab" data-tab="timers">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="13" r="8"/><polyline points="12 9 12 13 15 15"/><path d="M9 2h6M12 2v3"/></svg>
+    Timers
+  </div>
+  <div class="tab" data-tab="tasks">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+    Tasks
+  </div>
+  <div class="tab" data-tab="goals">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+    Goals
+  </div>
+  <div class="tab" data-tab="checkins">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/></svg>
+    Check-ins
+  </div>
+  <div class="tab" data-tab="chat">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+    Chat
+  </div>
+  <div class="tab" data-tab="counters">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M17 14v7M14 17.5h7"/></svg>
+    Counters
+  </div>
+  <div class="tab" data-tab="commands">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="6 10 9 13 6 16"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+    Commands
+  </div>
+  <div class="tab" data-tab="credits">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="14" y2="13"/><line x1="7" y1="17" x2="11" y2="17"/></svg>
+    Credits
+  </div>
+  <div class="tab" data-tab="songrequest">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    Song Request
+  </div>
+  <div class="tab" data-tab="diy">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>
+    D.I.Y
+  </div>
+  <div class="tab" data-tab="settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    Settings
+  </div>
+  <div id="tabOverflowWrap">
+    <button id="tabOverflowBtn" type="button" title="More tabs" aria-haspopup="true" aria-expanded="false">
+      <span class="chev">&#8943;</span><span id="tabOverflowLabel"></span>
+    </button>
+    <div id="tabOverflowMenu" role="menu"></div>
+  </div>
+</div>
+
+<div id="tabDisabledBanner">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+  <span class="msg"></span>
+  <button id="tabDisabledBannerOn" type="button">Turn on</button>
+</div>
+
+<div id="content">
+
+  <!-- WHEEL -->
+  <div class="tab-pane active" id="pane-wheel">
+    <div class="split">
+      <div class="left-wrap narrow">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('wheel')">Help</button></div>
+        <div class="left-col" id="wheelLeft"></div>
+      </div>
+      <div class="right-col">
+        <div class="preview-header">Live Preview</div>
+        <div id="wheelWinner"></div>
+        <div class="wheel-wrap">
+          <div id="wPointer"></div>
+          <canvas id="wCanvas" width="460" height="460"></canvas>
+        </div>
+        <button id="wSpinBtn">SPIN</button>
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="wOverlayUrl" readonly style="width:200px">
+          <button class="btn-sm" id="wCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GIVEAWAY -->
+  <div class="tab-pane" id="pane-giveaway">
+    <div class="split">
+      <div class="left-wrap">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('giveaway')">Help</button></div>
+        <div class="left-col" id="giveawayLeft"></div>
+      </div>
+      <div class="right-col">
+        <div class="preview-header">Live Preview</div>
+        <div id="gaPreview">
+          <div id="gaPreviewStatus">Giveaway Closed</div>
+          <div id="gaPreviewCount">0</div>
+          <div id="gaPreviewLabel">Entrants</div>
+          <div id="gaPreviewWinner"></div>
+        </div>
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="gaOverlayUrl" readonly style="width:200px">
+          <button class="btn-sm" id="gaCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TIMERS -->
+  <div class="tab-pane" id="pane-timers">
+    <div class="split">
+      <div class="left-wrap">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('timers')">Help</button></div>
+        <div class="left-col" id="timersLeft"></div>
+      </div>
+      <div class="right-col">
+        <div class="preview-header">Live Preview</div>
+        <div id="tmPreview"></div>
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="tmOverlayUrl" readonly style="width:200px">
+          <button class="btn-sm" id="tmCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TASKS -->
+  <div class="tab-pane" id="pane-tasks">
+    <div class="split">
+      <div class="left-wrap">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('tasks')">Help</button></div>
+        <div class="left-col" id="tasksLeft"></div>
+      </div>
+      <div class="right-col">
+        <div class="preview-header">Live Preview</div>
+        <div id="pomoPreviewWrap">
+          <div style="font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;font-weight:700">🍅 Pomodoro</div>
+          <div id="pomoPreviewBox" style="margin-bottom:14px"></div>
+          <div style="display:flex;justify-content:center;gap:8px;align-items:center;font-size:.75rem;color:var(--muted);margin-bottom:14px">
+            <span>Pomodoro URL:</span><input type="text" id="pomoOverlayUrl" readonly style="width:200px;font-size:.75rem;background:#0d0a1e">
+            <button class="btn-sm" id="pomoCopyUrl">Copy</button>
+          </div>
+        </div>
+        <div id="tkPreview">
+          <div style="font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;font-weight:700">Stream Tasks</div>
+          <div id="tkPreviewList"><div class="hint">No tasks yet.</div></div>
+        </div>
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="tkOverlayUrl" readonly style="width:200px">
+          <button class="btn-sm" id="tkCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GOALS -->
+  <div class="tab-pane" id="pane-goals">
+    <div class="split">
+      <div class="left-wrap">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('goals')">Help</button></div>
+        <div class="left-col" id="goalsLeft"></div>
+      </div>
+      <div class="right-col">
+        <div class="preview-header">Live Preview</div>
+        <div id="goPreview"></div>
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="goOverlayUrl" readonly style="width:200px">
+          <button class="btn-sm" id="goCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="tab-pane" id="pane-settings">
+    <div class="full-col">
+      <div class="help-bar"><button class="help-btn" onclick="window.showHelp('settings')">Help</button></div>
+      <div id="settContent"></div>
+    </div>
+  </div>
+
+  <!-- CHECK-INS -->
+  <div class="tab-pane" id="pane-checkins">
+    <div class="split">
+      <div class="left-wrap">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('checkins')">Help</button></div>
+        <div class="left-col" id="checkinsLeft"></div>
+      </div>
+      <div class="right-col">
+        <div class="preview-header">Check-in Preview</div>
+        <div id="ciPreview" style="width:100%;max-width:400px">
+          <div style="color:var(--muted);font-size:.85rem">Check-in popups appear here on stream.<br>Configure a reward and test with a manual redeem.</div>
+        </div>
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="ciOverlayUrl" readonly style="width:200px">
+          <button class="btn-sm" id="ciCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHAT -->
+  <div class="tab-pane" id="pane-chat">
+    <div class="split">
+      <div class="left-wrap">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('chat')">Help</button></div>
+        <div class="left-col" id="chatLeft"></div>
+      </div>
+      <div class="right-col">
+        <div class="preview-header" style="display:flex;align-items:center;gap:8px">
+          <span style="flex:1">Preview</span>
+          <button class="btn-sm btn-gold" id="chPrevDemo">Demo</button>
+          <button class="btn-sm btn-ghost" id="chPrevLive">Live chat</button>
+        </div>
+        <div class="transparency-grid" style="width:460px;height:560px;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
+          <iframe id="chatPreviewFrame" style="width:100%;height:100%;border:none" title="Chat overlay preview"></iframe>
+        </div>
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="chOverlayUrl" readonly style="width:200px">
+          <button class="btn-sm" id="chCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COUNTERS -->
+  <div class="tab-pane" id="pane-counters">
+    <div class="split">
+      <div class="left-wrap">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('counters')">Help</button></div>
+        <div class="left-col" id="countersLeft"></div>
+      </div>
+      <div class="right-col">
+        <div class="preview-header">Live Preview</div>
+        <div class="transparency-grid" style="width:420px;height:420px;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
+          <iframe id="countersPreviewFrame" style="width:100%;height:100%;border:none" title="Counters overlay preview"></iframe>
+        </div>
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="cntOverlayUrl" readonly style="width:200px">
+          <button class="btn-sm" id="cntCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CREDITS -->
+  <!-- COMMANDS -->
+  <div class="tab-pane" id="pane-commands">
+    <div class="cmd-full">
+      <div class="help-bar"><button class="help-btn" onclick="window.showHelp('commands')">Help</button></div>
+      <div id="commandsMain" class="cmd-body"></div>
+    </div>
+  </div>
+
+  <div class="tab-pane" id="pane-credits">
+    <div class="split">
+      <div class="left-wrap">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('credits')">Help</button></div>
+        <div class="left-col" id="creditsLeft"></div>
+      </div>
+      <div class="right-col">
+        <div class="preview-header">Preview</div>
+        <div class="transparency-grid" style="width:460px;height:400px;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
+          <iframe id="creditsPreviewFrame" style="width:100%;height:100%;border:none" title="Credits overlay preview"></iframe>
+        </div>
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="crOverlayUrl" readonly style="width:200px">
+          <button class="btn-sm" id="crCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- D.I.Y -->
+  <div class="tab-pane" id="pane-diy">
+    <div class="split">
+      <div class="left-wrap">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('diy')">Help</button></div>
+        <div class="left-col" id="diyLeft"></div>
+      </div>
+      <div class="right-col">
+        <div class="preview-header">Live Preview (demo traffic)</div>
+        <div class="transparency-grid" style="width:420px;height:420px;border-radius:10px;overflow:hidden;border:1px solid var(--line)">
+          <iframe id="diyPreviewFrame" style="width:100%;height:100%;border:none" title="D.I.Y overlay preview"></iframe>
+        </div>
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="diyOverlayUrl" readonly style="width:230px">
+          <button class="btn-sm" id="diyCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SONG REQUEST -->
+  <div class="tab-pane" id="pane-songrequest">
+    <div class="split">
+      <div class="left-wrap">
+        <div class="help-bar"><button class="help-btn" onclick="window.showHelp('songrequest')">Help</button></div>
+        <div class="left-col" id="songrequestLeft"></div>
+      </div>
+      <div class="right-col" id="songrequestRight">
+        <div class="overlay-bar">
+          <span>URL:</span><input type="text" id="srOverlayUrl" readonly style="width:200px">
+          <button class="btn-sm" id="srCopyUrl">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Help Modal -->
+<div id="helpModal">
+  <div id="helpBox">
+    <div id="helpBoxHead">
+      <div id="helpBoxTitle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span id="helpBoxTabName">Help</span>
+      </div>
+      <button id="helpBoxClose" title="Close">&#x2715;</button>
+    </div>
+    <div id="helpBoxBody"></div>
+  </div>
+</div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

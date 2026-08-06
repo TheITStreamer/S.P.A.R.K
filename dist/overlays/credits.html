@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Credits Overlay</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:transparent;overflow:hidden}
+#crRoot{position:fixed;inset:0}
+#crViewport{position:fixed;inset:0;overflow:hidden}
+#crScroll{position:absolute;left:0;right:0;will-change:transform}
+</style>
+</head>
+<body>
+<div id="crRoot"></div>
+<div id="crViewport"><div id="crScroll"></div></div>
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+import { defaultCfg, deepMerge } from '/js/credits-defaults.js';
+
+const root = document.getElementById('crRoot');
+const viewport = document.getElementById('crViewport');
+const scrollEl = document.getElementById('crScroll');
+
+let cfg = defaultCfg();
+let loopTimer = null;
+let loadedFonts = new Set();
+let isPlaying = false; // true while a real scroll animation is running — blocks settings-pushes (live chat) from restarting it mid-roll
+
+function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function loadFont(font){
+  if(!font || loadedFonts.has(font)) return;
+  loadedFonts.add(font);
+  const l=document.createElement('link');
+  l.rel='stylesheet';
+  l.href=`https://fonts.googleapis.com/css2?family=${encodeURIComponent(font)}:wght@400;600;700;800&display=swap`;
+  document.head.appendChild(l);
+}
+
+function hexToRgba(hex, opacityPct){
+  hex = (hex||'#000000').replace('#','');
+  if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+  const r=parseInt(hex.slice(0,2),16)||0, g=parseInt(hex.slice(2,4),16)||0, b=parseInt(hex.slice(4,6),16)||0;
+  const a = (opacityPct==null?100:opacityPct)/100;
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+function alignItems(){
+  return cfg.layout.align==='left' ? 'flex-start' : cfg.layout.align==='right' ? 'flex-end' : 'center';
+}
+
+function isHorizontal(){
+  return cfg.scroll.direction==='left' || cfg.scroll.direction==='right';
+}
+
+function applyStyle(){
+  loadFont(cfg.layout.font);
+  document.body.style.fontFamily = cfg.layout.font ? `'${cfg.layout.font}', sans-serif` : 'inherit';
+
+  const l = cfg.layout;
+  if(l.bg==='solid') root.style.background = hexToRgba(l.bgColor, (l.bgOpacity==null?1:l.bgOpacity)*100);
+  else if(l.bg==='gradient') root.style.background = `linear-gradient(180deg, ${hexToRgba(l.bgColor,(l.bgOpacity==null?1:l.bgOpacity)*100)}, ${hexToRgba(l.bgColor2,(l.bgOpacity==null?1:l.bgOpacity)*100)})`;
+  else root.style.background = 'transparent';
+
+  const horizontal = isHorizontal();
+
+  if(horizontal){
+    // Ticker band docked to top/middle/bottom of the screen; no fade mask —
+    // fading makes less sense for a thin horizontal strip.
+    viewport.style.maskImage = 'none';
+    viewport.style.webkitMaskImage = 'none';
+    viewport.style.left = '0'; viewport.style.right = '0';
+    const bh = cfg.scroll.bandHeight || 140;
+    if(cfg.scroll.dock==='top'){ viewport.style.top='0'; viewport.style.bottom='auto'; }
+    else if(cfg.scroll.dock==='middle'){ viewport.style.top='50%'; viewport.style.bottom='auto'; viewport.style.transform=`translateY(-${bh/2}px)`; }
+    else { viewport.style.bottom='0'; viewport.style.top='auto'; viewport.style.transform='none'; }
+    viewport.style.height = bh+'px';
+
+    scrollEl.style.width = 'auto';
+    scrollEl.style.left = 'auto'; scrollEl.style.right = 'auto'; scrollEl.style.marginLeft = '0';
+    scrollEl.style.top = '50%'; scrollEl.style.whiteSpace = 'nowrap';
+  } else {
+    const mask = cfg.scroll.fadeEdges
+      ? 'linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%)'
+      : 'none';
+    viewport.style.maskImage = mask;
+    viewport.style.webkitMaskImage = mask;
+    viewport.style.top = '0'; viewport.style.bottom = '0'; viewport.style.transform = 'none';
+    viewport.style.height = 'auto';
+
+    scrollEl.style.width = (l.width||640)+'px';
+    scrollEl.style.top = '0'; scrollEl.style.whiteSpace = 'normal';
+    if(l.align==='left'){ scrollEl.style.left='40px'; scrollEl.style.right='auto'; }
+    else if(l.align==='right'){ scrollEl.style.right='40px'; scrollEl.style.left='auto'; }
+    else { scrollEl.style.left='50%'; scrollEl.style.right='auto'; scrollEl.style.marginLeft = (-(l.width||640)/2)+'px'; }
+  }
+}
+
+function fontFamilyFor(sec){
+  const f = sec.font || cfg.layout.font;
+  loadFont(f);
+  return f ? `'${f}', sans-serif` : 'inherit';
+}
+
+function sectionHtml(sec){
+  const divider = sec.divider
+    ? `<div style="border-top:2px solid ${sec.headingColor};opacity:.45;margin:0 auto 18px;width:50%"></div>`
+    : '';
+  const ff = fontFamilyFor(sec);
+  const names = (sec.names||[]).map(n=>`
+    <div style="display:flex;align-items:center;justify-content:${alignItems()};gap:12px;margin:${cfg.scroll.gap==null?10:cfg.scroll.gap}px 0">
+      ${(n.avatarUrl && cfg.layout.showAvatars) ? `<img src="${esc(n.avatarUrl)}" style="width:${cfg.layout.avatarSize||44}px;height:${cfg.layout.avatarSize||44}px;border-radius:50%;object-fit:cover;flex-shrink:0">` : ''}
+      <span style="color:${sec.nameColor};font-size:${sec.nameSize}px;font-weight:600;font-family:${ff}">${esc(n.name)}</span>
+    </div>`).join('');
+  return `<div style="margin-bottom:${cfg.scroll.sectionGap==null?56:cfg.scroll.sectionGap}px;text-align:${cfg.layout.align}">
+    ${divider}
+    <div style="color:${sec.headingColor};font-size:${sec.headingSize}px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;margin-bottom:16px;font-family:${ff}">${esc(sec.heading)}</div>
+    ${names}
+  </div>`;
+}
+
+// Horizontal ticker rendering: "HEADING: name, name, name" inline, sections
+// laid out left-to-right with a gap between them.
+function sectionInlineHtml(sec){
+  const ff = fontFamilyFor(sec);
+  const names = (sec.names||[]).map(n=>`
+    <span style="display:inline-flex;align-items:center;vertical-align:middle;margin-right:${(cfg.scroll.gap==null?10:cfg.scroll.gap)+14}px">
+      ${(n.avatarUrl && cfg.layout.showAvatars) ? `<img src="${esc(n.avatarUrl)}" style="width:${Math.min(cfg.layout.avatarSize||44,(cfg.scroll.bandHeight||140)-30)}px;height:${Math.min(cfg.layout.avatarSize||44,(cfg.scroll.bandHeight||140)-30)}px;border-radius:50%;object-fit:cover;margin-right:8px;vertical-align:middle">` : ''}
+      <span style="color:${sec.nameColor};font-size:${sec.nameSize}px;font-weight:600;font-family:${ff}">${esc(n.name)}</span>
+    </span>`).join('');
+  return `<span style="display:inline-flex;align-items:center;vertical-align:middle;margin-right:${(cfg.scroll.sectionGap==null?56:cfg.scroll.sectionGap)}px">
+    <span style="color:${sec.headingColor};font-size:${sec.headingSize}px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;margin-right:18px;font-family:${ff}">${esc(sec.heading)}:</span>
+    ${names}
+  </span>`;
+}
+
+function playRoster(payload){
+  clearTimeout(loopTimer);
+  isPlaying = true;
+  const roster = payload.roster || [];
+  currentRoster = roster;
+  if(payload.layout) deepMerge(cfg.layout, payload.layout);
+  if(payload.scroll) deepMerge(cfg.scroll, payload.scroll);
+  applyStyle();
+
+  const horizontal = isHorizontal();
+  const empty = `<div style="text-align:center;color:#888;font-size:14px">No one to thank yet — chat needs some activity first.</div>`;
+
+  if(horizontal){
+    scrollEl.innerHTML = roster.map(sectionInlineHtml).join('') || empty;
+    scrollEl.style.transition = 'none';
+    scrollEl.style.transform = 'translateY(-50%) translateX(0px)';
+    void scrollEl.offsetHeight;
+
+    const contentW = scrollEl.offsetWidth;
+    const viewW = window.innerWidth;
+    const dir = cfg.scroll.direction === 'right' ? 'right' : 'left';
+    const startX = dir === 'left' ? viewW : -contentW;
+    const endX   = dir === 'left' ? -contentW : viewW;
+    scrollEl.style.transform = `translateY(-50%) translateX(${startX}px)`;
+    void scrollEl.offsetHeight;
+
+    const distance = Math.abs(endX - startX);
+    const speed = Math.max(5, cfg.scroll.speed || 50);
+    const duration = Math.max(2, distance / speed);
+    scrollEl.style.transition = `transform ${duration}s linear`;
+    requestAnimationFrame(()=>{ scrollEl.style.transform = `translateY(-50%) translateX(${endX}px)`; });
+
+    if(cfg.scroll.loop){
+      loopTimer = setTimeout(()=>playRoster(payload), duration*1000 + 500);
+    } else {
+      loopTimer = setTimeout(()=>{ isPlaying = false; currentRoster = []; }, duration*1000 + 500);
+    }
+    return;
+  }
+
+  scrollEl.innerHTML = roster.map(sectionHtml).join('') || empty;
+  scrollEl.style.transition = 'none';
+  scrollEl.style.transform = 'translateY(0px)';
+  // force reflow so the browser registers the reset before we measure/animate
+  void scrollEl.offsetHeight;
+
+  const contentH = scrollEl.offsetHeight;
+  const viewH = window.innerHeight;
+  const dir = cfg.scroll.direction === 'down' ? 'down' : 'up';
+  const startY = dir === 'up' ? viewH : -contentH;
+  const endY   = dir === 'up' ? -contentH : viewH;
+  scrollEl.style.transform = `translateY(${startY}px)`;
+  void scrollEl.offsetHeight;
+
+  const distance = Math.abs(endY - startY);
+  const speed = Math.max(5, cfg.scroll.speed || 50);
+  const duration = Math.max(2, distance / speed);
+  scrollEl.style.transition = `transform ${duration}s linear`;
+  requestAnimationFrame(()=>{ scrollEl.style.transform = `translateY(${endY}px)`; });
+
+  if(cfg.scroll.loop){
+    loopTimer = setTimeout(()=>playRoster(payload), duration*1000 + 500);
+  } else {
+    loopTimer = setTimeout(()=>{ isPlaying = false; currentRoster = []; }, duration*1000 + 500);
+  }
+}
+
+let lastRoster = [];    // latest roster resolved from settings/snapshot pushes — used for autoplay-on-load
+let currentRoster = []; // whatever roster is actually rendered on screen right now — used for live restyling
+
+function applySettings(newCfg, roster){
+  if(!newCfg) return;
+  cfg = deepMerge(defaultCfg(), newCfg);
+  if(roster) lastRoster = roster;
+  applyStyle();
+}
+
+// ?preview=1 — the SPARK tab's live-preview iframe. It is driven directly by
+// the tab via postMessage (always renders, sample names as fallback) and must
+// not autoplay or self-replay off the shared event stream, or the two paths
+// double-restart the scroll on every tweak.
+const isPreview = new URLSearchParams(location.search).has('preview');
+window.addEventListener('message', ev => {
+  const d = ev.data;
+  if(!d || d.type !== 'spark-preview') return;
+  applySettings(d.cfg, null);
+  playRoster({ roster: d.roster || [], layout: cfg.layout, scroll: cfg.scroll });
+});
+
+setTool('credits');
+on('_snapshot', snap => {
+  if(!snap || !snap.cfg) return;
+  applySettings(snap.cfg, snap.roster);
+  // Autoplay only fires on the initial page load/snapshot (e.g. OBS scene
+  // switch reloading this browser source) — never on a later live settings tweak.
+  if(cfg.scroll.autoplay && !isPreview){
+    setTimeout(()=>playRoster({ roster:lastRoster, layout:cfg.layout, scroll:cfg.scroll }), 400);
+  }
+});
+on('settings', ev => {
+  applySettings(ev.cfg, ev.roster);
+  // Live-preview convenience: if something is already showing (e.g. a sample
+  // preview or a live run), immediately redraw it with the freshly changed
+  // styling — presets, fonts, colours, etc. — instead of leaving it stale
+  // until the next explicit Play/Preview click. (Preview iframes are driven
+  // by postMessage instead — see above.)
+  // ...but never restart while a roll is actively animating: live chat pushes
+  // a fresh 'settings' every ~1.5s, and a restart mid-roll would send the
+  // credits back to the start each time.
+  if(currentRoster.length && !isPreview && !isPlaying){
+    playRoster({ roster: currentRoster, layout: cfg.layout, scroll: cfg.scroll });
+  }
+});
+on('play', ev => playRoster(ev));
+applyStyle();
+startPolling();
+</script>
+</body>
+</html>

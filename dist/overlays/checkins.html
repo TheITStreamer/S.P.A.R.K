@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Check-ins Overlay</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:transparent;overflow:hidden}
+
+/* First claim — persistent */
+#firstBlock{
+  position:fixed;display:none;align-items:center;gap:12px;padding:12px 18px;
+  border:2px solid #ffc83d;border-radius:12px;background:#262040;
+  box-shadow:0 4px 24px rgba(0,0,0,.5);min-width:200px;max-width:380px;color:#fff;
+}
+#firstBlock.show{display:flex}
+#firstBlock.top-left    {top:20px;left:20px}
+#firstBlock.top-center  {top:20px;left:50%;transform:translateX(-50%)}
+#firstBlock.top-right   {top:20px;right:20px}
+#firstBlock.middle-left {top:50%;left:20px;transform:translateY(-50%)}
+#firstBlock.middle      {top:50%;left:50%;transform:translate(-50%,-50%)}
+#firstBlock.middle-right{top:50%;right:20px;transform:translateY(-50%)}
+#firstBlock.bottom-left {bottom:20px;left:20px}
+#firstBlock.bottom-center{bottom:20px;left:50%;transform:translateX(-50%)}
+#firstBlock.bottom-right{bottom:20px;right:20px}
+#firstAvatar{width:48px;height:48px;border-radius:50%;object-fit:cover;flex-shrink:0;border:2px solid currentColor}
+#firstName{font-weight:800;font-size:1.05rem}
+#firstText{font-size:.85rem;margin-top:2px;opacity:.8}
+
+/* Check-in queue */
+#queue{position:fixed;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+#queue.bottom-right {bottom:20px;right:20px;align-items:flex-end}
+#queue.bottom-center{bottom:20px;left:50%;transform:translateX(-50%);align-items:center}
+#queue.bottom-left  {bottom:20px;left:20px;align-items:flex-start}
+#queue.top-right    {top:20px;right:20px;align-items:flex-end;flex-direction:column-reverse}
+#queue.top-center   {top:20px;left:50%;transform:translateX(-50%);align-items:center;flex-direction:column-reverse}
+#queue.top-left     {top:20px;left:20px;align-items:flex-start;flex-direction:column-reverse}
+#queue.middle-right {top:50%;right:20px;transform:translateY(-50%);align-items:flex-end}
+#queue.middle-left  {top:50%;left:20px;transform:translateY(-50%);align-items:flex-start}
+.ci-card{
+  display:flex;align-items:center;gap:12px;
+  padding:0 16px 0 6px;
+  border:2px solid #ffc83d;
+  background:#262040;
+  overflow:hidden;
+  pointer-events:none;
+}
+.ci-card.shape-rounded{border-radius:12px}
+.ci-card.shape-pill{border-radius:999px}
+.ci-card.shape-square{border-radius:4px}
+.ci-avatar{width:52px;height:52px;border-radius:50%;object-fit:cover;flex-shrink:0;margin:10px 0 10px 8px}
+.ci-text{font-weight:700;color:#fff;font-size:.95rem;line-height:1.3}
+
+/* Animations */
+@keyframes slideFromBottom{from{transform:translateY(60px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes slideFromTop{from{transform:translateY(-60px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes slideFromLeft{from{transform:translateX(-60px);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes slideFromRight{from{transform:translateX(60px);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes bounce{0%{transform:scale(0.3);opacity:0}60%{transform:scale(1.1)}80%{transform:scale(0.95)}100%{transform:scale(1);opacity:1}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes pop{0%{transform:scale(0);opacity:0}70%{transform:scale(1.06)}100%{transform:scale(1);opacity:1}}
+@keyframes slideOut{to{transform:translateY(20px);opacity:0}}
+</style>
+</head>
+<body>
+<div id="firstBlock">
+  <img id="firstAvatar" src="" alt="">
+  <div>
+    <div id="firstName"></div>
+    <div id="firstText"></div>
+  </div>
+</div>
+<div id="queue"></div>
+
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+
+const firstBlock = document.getElementById('firstBlock');
+const firstAvatar = document.getElementById('firstAvatar');
+const firstName = document.getElementById('firstName');
+const firstText = document.getElementById('firstText');
+const queue = document.getElementById('queue');
+
+function applyFirstStyles(cfg){
+  firstBlock.className = 'show ' + (cfg.pos||'top-right');
+  firstBlock.style.background   = cfg.bgColor    || '#262040';
+  firstBlock.style.borderColor  = cfg.borderColor|| '#ffc83d';
+  firstBlock.style.fontFamily   = `'${cfg.font||'Segoe UI'}',sans-serif`;
+  firstBlock.style.fontSize     = (cfg.fontSize||15)+'px';
+  firstBlock.style.width        = cfg.width ? cfg.width+'px' : '';
+  firstBlock.style.height       = cfg.height ? cfg.height+'px' : '';
+  const r = cfg.shape==='pill'?'999px':cfg.shape==='square'?'4px':'12px';
+  firstBlock.style.borderRadius = r;
+  const tc = cfg.textColor || '#ffffff';
+  firstName.style.color  = tc;
+  firstText.style.color  = tc;
+  firstAvatar.style.borderColor = cfg.borderColor || '#ffc83d';
+  // Scale avatar with height if fixed
+  if(cfg.height){
+    const avatarSize = Math.min(Math.round(cfg.height*0.62), 64);
+    firstAvatar.style.width  = avatarSize+'px';
+    firstAvatar.style.height = avatarSize+'px';
+  } else {
+    firstAvatar.style.width  = '48px';
+    firstAvatar.style.height = '48px';
+  }
+}
+
+on('first', ev=>{
+  const cfg = ev.cfg||{};
+  const winner = cfg.winner||{};
+  firstName.textContent = winner.display||'';
+  firstText.textContent = cfg.display||'was first!';
+  if(winner.avatar){ firstAvatar.src=winner.avatar; firstAvatar.style.display='block'; }
+  else { firstAvatar.style.display='none'; }
+  applyFirstStyles(cfg);
+  if(cfg.autoHide){
+    setTimeout(()=>{ firstBlock.className=''; firstBlock.classList.remove('show'); }, (cfg.hideSecs||30)*1000);
+  }
+});
+
+on('first_clear', ()=>{ firstBlock.className=''; firstBlock.classList.remove('show'); });
+
+on('checkin', ev=>{
+  // Apply queue position class
+  const pos = ev.pos||'bottom-right';
+  queue.className = pos;
+
+  const card = document.createElement('div');
+  card.className = `ci-card shape-${ev.shape||'rounded'}`;
+  card.style.background = ev.bgColor||'#262040';
+  card.style.borderColor = ev.borderColor||'#ffc83d';
+  card.style.color = ev.textColor||'#ffffff';
+  card.style.fontFamily = `'${ev.font||'Segoe UI'}',sans-serif`;
+  card.style.width = (ev.width||320)+'px';
+  card.style.height = (ev.height||90)+'px';
+
+  // avatar — size scales with card height
+  const avatarSize = Math.min(Math.round((ev.height||90)*0.62), 64);
+  const img = document.createElement('img');
+  img.className='ci-avatar';
+  img.style.display = ev.avatar?'block':'none';
+  img.style.width = avatarSize+'px'; img.style.height = avatarSize+'px';
+  if(ev.avatar) img.src=ev.avatar;
+
+  const txt = document.createElement('div');
+  txt.className='ci-text';
+  txt.style.fontSize = (ev.fontSize||15)+'px';
+  txt.textContent = ev.text||'';
+
+  card.appendChild(img); card.appendChild(txt);
+
+  // Determine animation
+  const dir = ev.entryDir||'bottom';
+  const anim = ev.animation||'slide';
+  let animName = 'slideFromBottom';
+  if(anim==='slide'){
+    animName = dir==='top'?'slideFromTop':dir==='left'?'slideFromLeft':dir==='right'?'slideFromRight':'slideFromBottom';
+  } else if(anim==='bounce'){ animName='bounce'; }
+  else if(anim==='fade'){ animName='fadeIn'; }
+  else if(anim==='pop'){ animName='pop'; }
+  card.style.animation = `${animName} 0.45s cubic-bezier(.22,1,.36,1) forwards`;
+
+  // Insert at top of queue (iPhone roll-up: new ones appear at bottom)
+  queue.appendChild(card);
+
+  // Remove after duration
+  const dur = (ev.duration||5)*1000;
+  setTimeout(()=>{
+    card.style.animation='slideOut 0.35s ease forwards';
+    setTimeout(()=>card.remove(), 380);
+  }, dur);
+});
+
+setTool('checkins');
+startPolling();
+</script>
+</body>
+</html>

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Timers Overlay</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;background:transparent;overflow:hidden}
+#stack{position:fixed;top:20px;right:20px;display:flex;flex-direction:column;gap:12px;align-items:flex-end}
+.timer-item{background:rgba(0,0,0,.65);border:2px solid rgba(255,200,61,.5);border-radius:12px;padding:10px 18px;text-align:right;opacity:0;transition:opacity .4s ease;min-width:200px}
+.timer-item.show{opacity:1}
+.timer-label{font-family:'Segoe UI',sans-serif;font-size:.8rem;color:rgba(255,255,255,.7);letter-spacing:.1em;text-transform:uppercase}
+.timer-time{font-size:2.2rem;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums;display:inline-block}
+.timer-msg{font-size:1rem;color:#ffc83d;font-style:italic;margin-top:4px;display:none}
+.timer-msg.show{display:block}
+</style>
+</head>
+<body>
+<div id="stack"></div>
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+
+const stack=document.getElementById('stack');
+let timerEls={};
+let timerState={}; // id -> {remaining, at, running, mode, endMessage, doneAt}
+
+function fmtTime(s){
+  s=Math.max(0,Math.floor(s));
+  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=s%60;
+  if(h>0) return `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+  return `${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+}
+
+function loadFont(font){
+  if(!font||document.getElementById('gf-'+font.replace(/\s/g,'-'))) return;
+  const l=document.createElement('link');
+  l.id='gf-'+font.replace(/\s/g,'-');l.rel='stylesheet';
+  l.href=`https://fonts.googleapis.com/css2?family=${encodeURIComponent(font)}&display=swap`;
+  document.head.appendChild(l);
+}
+
+function removeEl(id){
+  const el=timerEls[id]; if(!el) return;
+  el.classList.remove('show');
+  setTimeout(()=>el.remove(),500);
+  delete timerEls[id]; delete timerState[id];
+}
+
+// SPARK only pushes on state changes (start/pause/reset/finish); the overlay
+// interpolates the display locally from `remaining` + `at` (send timestamp).
+function render(timers){
+  const now=Date.now();
+  const keep=new Set();
+  (timers||[]).forEach(t=>{
+    const done=t.mode==='down'&&!t.running&&Math.floor(t.remaining)<=0;
+    const show=t.running||t.remaining>0||(done&&t.endMessage);
+    if(!show) return;
+    keep.add(t.id);
+    const prev=timerState[t.id];
+    timerState[t.id]={
+      remaining:t.remaining, at:t.at||now, running:!!t.running,
+      mode:t.mode, endMessage:t.endMessage||'',
+      doneAt: done ? (prev&&prev.doneAt?prev.doneAt:now) : null,
+    };
+    loadFont(t.font);
+    if(!timerEls[t.id]){
+      const div=document.createElement('div');
+      div.className='timer-item';div.dataset.id=t.id;
+      div.innerHTML=`<div class="timer-label">${t.name||''}</div><div class="timer-time" style="font-family:'${t.font||'monospace'}',monospace;color:${t.color||'#ffc83d'}">${fmtTime(t.remaining)}</div><div class="timer-msg">${t.endMessage||''}</div>`;
+      stack.appendChild(div);
+      timerEls[t.id]=div;
+      requestAnimationFrame(()=>div.classList.add('show'));
+    } else {
+      // Labels are not fixed for life: removing a timer renumbers the ones after
+      // it, so the label has to follow SPARK rather than stay as first drawn.
+      const lbl=timerEls[t.id].querySelector('.timer-label');
+      if(lbl && lbl.textContent!==(t.name||'')) lbl.textContent=t.name||'';
+      const msg=timerEls[t.id].querySelector('.timer-msg');
+      if(msg && msg.textContent!==(t.endMessage||'')) msg.textContent=t.endMessage||'';
+    }
+  });
+  Object.keys(timerEls).forEach(id=>{ if(!keep.has(id)) removeEl(id); });
+  tick();
+}
+
+function currentRemaining(st){
+  if(!st.running) return st.remaining;
+  const elapsed=(Date.now()-st.at)/1000;
+  return st.mode==='down' ? Math.max(0, st.remaining-elapsed) : st.remaining+elapsed;
+}
+
+function tick(){
+  const now=Date.now();
+  Object.entries(timerState).forEach(([id,st])=>{
+    const el=timerEls[id]; if(!el) return;
+    const rem=currentRemaining(st);
+    const te=el.querySelector('.timer-time');
+    if(te){
+      te.textContent=fmtTime(rem);
+      // Lock the box to the widest time string seen so far — decorative Google
+      // Fonts often lack tabular figures, so digit changes (1 vs 0) reshape the
+      // text width and make the whole box expand and shrink every second.
+      const w=te.scrollWidth, prev=+(te.dataset.w||0);
+      if(w>prev){ te.dataset.w=w; te.style.minWidth=w+'px'; }
+    }
+    const done=st.mode==='down'&&rem<=0;
+    const msg=el.querySelector('.timer-msg');
+    if(msg) msg.classList.toggle('show',done&&!!st.endMessage);
+    if(done&&!st.doneAt){ st.doneAt=now; st.running=false; st.remaining=0; }
+    // Finished timers linger 10s (so the end message is actually seen), then fade
+    if(st.doneAt&&now-st.doneAt>10000) removeEl(id);
+  });
+}
+setInterval(tick,250);
+
+setTool('timers');
+on('_snapshot',s=>render(s));
+on('timers_state',ev=>render(ev.timers));
+startPolling();
+</script>
+</body>
+</html>

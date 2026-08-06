@@ -1,0 +1,32 @@
+[package]
+name = "spark"
+version = "0.8.2"
+description = "S.P.A.R.K. - Streaming Panel for Alerts, Redeems and Key tools"
+authors = ["SPARK"]
+edition = "2021"
+
+[lib]
+name = "spark_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tiny_http = "0.12"
+reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
+tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
