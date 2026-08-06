@@ -3,41 +3,47 @@ Some things may be a little janky/not work properly.
 
 Streaming Panel for Alerts, Redeems and Key-tools. A Windows app for Twitch streamers. Everything will run locally on your PC.
 
+## A.I Disclaimer
+I do not claim to be a programmer or having made this. Yes, I prompted Claude and reviewed, tested, self QA'd and tweaked. I knew
+what the outcomes should be and understand the issues enough to be able to redirect Claude to be able to fix as I do have an IT
+background. I completely understand if you do not trust this project but I wanted to make it clear that I orginally made this for
+just myself and decided to share incase someone else was interested. I do not claim to be the creator, I just gave prompts and if
+it was good, I went with it. 
+
 ## What it does
 
 * **Wheel** - spin a wheel to pick from a list. Can be triggered by channel point redeems.
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/58b05c9f-e0c8-448f-91bd-623a87e7bbc1" />
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/397f7c07-2cc8-4548-8957-399afa047894" />
 
 * **Giveaway** - viewers enter by typing a word in chat. Draw a winner with a slot machine overlay.
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/7a871256-eca3-494a-9b83-a94bf10b1075" />
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/9a5ced5f-b9ac-4b3d-b06e-2dc0d00caf52" />
 
 * **Timers** - countdown or stopwatch timers, started manually, by redeem, or by chat command.
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/3d60c022-a721-4fcb-8d3c-6f9014eaff49" />
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/d4704883-5e89-47cb-87d6-f13d0a293884" />
 
 * **Tasks** - shared to do list for you and your viewers using `!task` commands as well as a pomodoro timer with its own commands. 
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/9aa019e3-fc39-402f-b2c4-f7dfc2a0f0e7" />
-
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/a4118f4d-7e34-4ba1-9c1e-060433a66c63" />
 
 * **Goals** - animated progress bars for followers, subs, bits, or custom chat commands.
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/4cb8d09e-6f96-4a48-8852-b4be404f899e" />
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/36a9744d-dde6-4362-abe2-07b3a60f761e" />
 
 * **Check-ins** - popup when a viewer redeems a check-in reward, with lifetime counts.
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/081e99ae-445f-47cc-9441-47724915a647" />
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/f782b22b-772c-4c43-99ac-159d8ddbecf5" />
 
 * **Chat** - fully styled chat overlay with per role colors, follow and sub alerts, and animated emotes.
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/f4f1152c-acbe-44bc-9e77-67f147465966" />
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/b2609e5c-4c78-4d88-8bc0-bd8099c7e5d6" />
 
 * **Counters** - death counters, hug counters, any number chat can raise or lower with a command.
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/fc960a7f-226e-472c-aad0-8c8f3c48f090" />
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/0a2eb836-d0bb-4842-bde9-b9397baab91f" />
 
 * **Song Request** - viewers request songs with channel points or `!sr`. Plays through YouTube Music via [Pear Desktop](https://github.com/pear-devs/pear-desktop).
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/93be422b-6426-4a96-a714-5f82f8770c6b" />
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/b492bd8c-744f-430e-8ea8-f7306abc25fa" />
 
 * **Credits** - end of stream rolling credits for mods, VIPs, subs, followers and chatters, plus a free text special thanks section. Only viewers who actually chatted get included. Pick a style preset or customize colors, fonts, scroll direction/speed, and section order yourself.
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/25c70d9b-39b1-43ba-92a2-df9347fce06b" />
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/3408a3dc-7e0a-4e88-9f92-b6598c17be72" />
 
 * **D.I.Y** - build your own chat and alert widgets. Style them with the visual designer or write your own CSS, pick a Google Font, and watch the live preview update while you edit. Alerts cover follows, subs, bits and raids with editable text and a sound. Chat can scroll any direction, tilt, show events inline, and stay single line if you want. Copy the widget URL into OBS and it runs off your live Twitch chat.
-<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/61e375fb-8a02-4434-bdf4-a272ccb7ae34" />
+<img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/e47d707f-1df1-4677-b680-18baa5479bbc" />
 
 Every tool has its own OBS browser source overlay. There is also a master overlay that can show several tools in one source, set up from the Settings tab, with drag and resize layout editing right in the browser.
 
