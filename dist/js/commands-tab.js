@@ -129,6 +129,10 @@ const VAR_GROUPS = [
     { k:'{amount}',         d:'Bits cheered, or how many subs were gifted',        ex:'500' },
     { k:'{targetusername}',  d:'The raider’s name. The other target variables work on them too, so a raid can show their picture', ex:'D3stiny82' },
   ]},
+  { g:'When an ad break sets it off', vars:[
+    { k:'{adduration}',     d:'How many seconds the ad break runs for',           ex:'180' },
+    { k:'{adnextin}',       d:'Seconds until the break starts. Only means anything on the “ads are coming up” trigger; it is 0 on the other two', ex:'60' },
+  ]},
   { g:'Your other SPARK tabs', vars:[
     { k:'{song}',           d:'The song playing right now',                       ex:'Never Gonna Give You Up' },
     { k:'{songartist}',     d:'Who the song is by',                               ex:'Rick Astley' },
@@ -163,7 +167,7 @@ const VAR_GROUPS = [
 
 let commands = [];
 let automsgs = [];
-let cfg = { autoPauseOffline: true };
+let cfg = { autoPauseOffline: true, adWarnSeconds: 60 };
 
 let mode = 'commands';   // 'commands' | 'auto'
 let selId = null;        // selected row in whichever list is showing
@@ -687,6 +691,10 @@ async function resolveVars(text, ctx){
     // many subs were gifted. Zero everywhere else.
     out = out.replace(/\{raiders\}/gi,   String(ctx.amount || 0));
     out = out.replace(/\{amount\}/gi,    String(ctx.amount || 0));
+    // Ad break triggers. Zero everywhere else, which reads sensibly if someone
+    // puts one in an ordinary command by mistake.
+    out = out.replace(/\{adduration\}/gi, String(ctx.adDuration || 0));
+    out = out.replace(/\{adnextin\}/gi,   String(ctx.adNextIn   || 0));
     out = out.replace(/\{target\}/gi,    argList[0] || '');
     out = out.replace(/\{args\}/gi,      args);
     out = out.replace(/\{args:(\d+)\}/gi, (_m,n) => argList.slice(Math.max(0,parseInt(n)-1)).join(' '));
@@ -1021,6 +1029,9 @@ const EVENT_TRIGGERS = [
   { v:'sub',     l:'Someone subscribes' },
   { v:'giftsub', l:'Someone gifts subs' },
   { v:'bits',    l:'Someone cheers bits' },
+  { v:'adwarn',  l:'Ads are coming up' },
+  { v:'adstart', l:'Ads start' },
+  { v:'adend',   l:'Ads finish' },
 ];
 
 window.addEventListener('spark-goal', async e => {
@@ -1126,7 +1137,100 @@ window.addEventListener('spark-redeem', async e => {
   });
 });
 
-// ── Auto Messages scheduler ──────────────────────────────────────────────────
+// ── Clock-driven jobs ──────────────────────────────────────────────────
+// Two things here run on a clock rather than in response to anyone typing:
+// the ad break triggers, then the rotating auto messages.
+
+// ── Ad breaks ──────────────────────────────────────────────────────────
+// Twitch only announces one of the three moments: the START of a break, via
+// EventSub. The other two are derived.
+//
+//   coming up — polled from the ad schedule, which gives an absolute time for
+//               the next break. The clock is then watched locally, so the
+//               warning lands within a few seconds of the lead time even
+//               though the schedule is only fetched once a minute.
+//   finish    — a timer set from the start event plus the duration Twitch
+//               reports. Nothing tells us an ad actually ended.
+//
+// A snooze after the warning has already gone out cannot be taken back. That
+// is a limit of there being no warning event at all, not a fault here.
+
+let adPollTick  = null;
+let adCheckTick = null;
+// nextAt/duration come from the schedule; warnedFor holds the nextAt value a
+// warning has already been sent for, so one scheduled break warns exactly once.
+const adState = { nextAt: 0, duration: 0, warnedFor: 0, endTimer: null };
+
+function adWarnLead(){
+  return Math.max(5, Math.min(600, parseInt(cfg.adWarnSeconds) || 60));
+}
+
+function anyCommandWants(kind){
+  return commands.some(c => c.enabled !== false && Array.isArray(c.events) && c.events.includes(kind));
+}
+
+// Nobody types anything for these, so there is no permission or cooldown to
+// apply — the same rule raids and follows already use.
+async function fireAdCommands(kind, ctx){
+  const hits = commands.filter(c => c.enabled !== false && Array.isArray(c.events) && c.events.includes(kind));
+  if(!hits.length) return;
+  if(toolBlocked('commands', '')) return;
+  for(const cmd of hits){
+    if(!(await conditionsMet(cmd))) continue;
+    await runActions(cmd, Object.assign({
+      user: store.twitch.login || '', login: store.twitch.login || '',
+      args: '', cmd, userCount: 0,
+    }, ctx));
+  }
+}
+
+async function adPoll(){
+  if(!store.twitch.connected) return;
+  // Only the warning needs the schedule, so a setup without one makes no calls.
+  if(!anyCommandWants('adwarn')){ adState.nextAt = 0; return; }
+  try{
+    const s = await invoke('twitch_get_ad_schedule');
+    const t = Date.parse((s && s.next_ad_at) || '');
+    // Twitch hands back an epoch-zero placeholder when no break is scheduled,
+    // so anything not in the future is treated as "nothing due".
+    adState.nextAt   = (isFinite(t) && t > Date.now()) ? t : 0;
+    adState.duration = parseInt(s && s.duration) || 0;
+  }catch(e){ /* no scope, offline, not an affiliate — the banner covers it */ }
+}
+
+function adCheck(){
+  if(!adState.nextAt) return;
+  const secs = Math.round((adState.nextAt - Date.now()) / 1000);
+  if(secs < 0 || secs > adWarnLead()) return;
+  if(adState.warnedFor === adState.nextAt) return;
+  adState.warnedFor = adState.nextAt;
+  fireAdCommands('adwarn', { adDuration: adState.duration, adNextIn: Math.max(0, secs) }).catch(()=>{});
+}
+
+window.addEventListener('spark-ad', async e => {
+  const d = e.detail || {};
+  const dur = Math.max(0, parseInt(d.duration) || 0);
+  // The break is happening, so the schedule we were counting down to is spent.
+  adState.nextAt = 0;
+  clearTimeout(adState.endTimer);
+  await fireAdCommands('adstart', { adDuration: dur, adNextIn: 0 });
+  if(dur > 0){
+    adState.endTimer = setTimeout(() => {
+      fireAdCommands('adend', { adDuration: dur, adNextIn: 0 }).catch(()=>{});
+    }, dur * 1000);
+  }
+  // Pick up the next break straight away rather than waiting for the next tick.
+  adPoll().catch(()=>{});
+});
+
+function startAdLoops(){
+  clearInterval(adPollTick); clearInterval(adCheckTick);
+  adPollTick  = setInterval(() => { adPoll().catch(()=>{}); }, 60000);
+  adCheckTick = setInterval(adCheck, 5000);
+  adPoll().catch(()=>{});   // fire-and-forget: must never hold up boot
+}
+
+// ── Auto Messages scheduler ───────────────────────────────────────────────
 // Ticks once a minute. Each message tracks its own last-sent time and the chat
 // line count at that moment, so "every 15 min but only if 5 people have said
 // something" works without a second timer.
@@ -1188,14 +1292,17 @@ function startAutoLoop(){
 // Announcements need the moderator:manage:announcements scope, which older
 // tokens do not carry.
 
-function showScopeBanner(){
+function showScopeBanner(missing){
   const host = $('cmdScopeWarn');
   if(!host) return;
+  const list = (missing && missing.length) ? missing : ['Some features'];
+  const what = list.join(' and ');
   // Must be "Log out" specifically: the refresh-token grant never widens
   // scopes, so only a fresh device-code auth picks the new one up.
-  host.innerHTML = '⚠ Announcements need a Twitch permission your connection does not have yet. '
+  host.innerHTML = '⚠ ' + esc(what.charAt(0).toUpperCase() + what.slice(1))
+    + ' need a Twitch permission your connection does not have yet. '
     + 'Go to <strong>Settings</strong>, click <strong>Log out</strong>, then connect Twitch again. '
-    + 'Chat messages and sounds work fine either way.';
+    + 'Everything else works either way.';
   host.style.display = 'block';
 }
 
@@ -1203,7 +1310,10 @@ async function checkScope(){
   if(!store.twitch.connected) return;
   try{
     const scopes = await invoke('twitch_token_scopes');
-    if(!scopes.includes('moderator:manage:announcements')) showScopeBanner();
+    const missing = [];
+    if(!scopes.includes('moderator:manage:announcements')) missing.push('announcements');
+    if(!scopes.includes('channel:read:ads')) missing.push('the ad break triggers');
+    if(missing.length) showScopeBanner(missing);
   }catch(e){ /* offline or not connected — nothing useful to say */ }
 }
 
@@ -1215,7 +1325,7 @@ window.addEventListener('spark-send-error', e => {
   const host = $('cmdScopeWarn');
   if(!host) return;
   if(d.kind === 'announce' && (d.status === 401 || d.status === 403) && d.source !== 'bot'){
-    if(!scopeWarned){ scopeWarned = true; showScopeBanner(); }
+    if(!scopeWarned){ scopeWarned = true; showScopeBanner(['announcements']); }
     return;
   }
   if(d.kind === 'rate'){
@@ -1707,6 +1817,13 @@ function renderCommandEditor(c){
           </label>`).join('')}
         </div>
         <div class="hint">Nobody types anything for these, so cooldowns and permission do not apply. <code>{user}</code> is the person who raided or followed, and <code>{targetavatar}</code> is their picture, so a raid can put their face on your overlay.</div>
+        <div class="hint">The three ad triggers fire on their own too. <code>{adduration}</code> is how long the break runs, and <code>{adnextin}</code> is the seconds left before it starts.</div>
+        <div class="row" style="align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <label style="margin:0">Warn</label>
+          <input type="number" id="cmdEdAdWarn" value="${Math.max(5, Math.min(600, parseInt(cfg.adWarnSeconds)||60))}" min="5" max="600" style="width:90px">
+          <label style="margin:0">seconds before an ad break</label>
+        </div>
+        <div class="hint">Shared by every command, since there is only one ad schedule. Twitch gives no warning of its own, so SPARK watches the schedule — snoozing a break after the warning has gone out cannot un-send it. “Ads finish” is worked out from the start plus the length Twitch reports, so a manually shortened break ends a little late.</div>
       </div>
 
       <hr class="sep">
@@ -1821,6 +1938,12 @@ function wireCommandEditor(c){
   });
   $('cmdEdWhen').addEventListener('change', e => { c.when = e.target.value; persist(); renderList(); });
   $('cmdEdCats').addEventListener('change', e => { c.categories = e.target.value.trim(); persist(); });
+  const adWarnEl = $('cmdEdAdWarn');
+  if(adWarnEl) adWarnEl.addEventListener('change', e => {
+    cfg.adWarnSeconds = Math.max(5, Math.min(600, parseInt(e.target.value)||60));
+    e.target.value = cfg.adWarnSeconds;
+    persist();
+  });
 
   const foldAll = $('cmdEdFoldAll');
   if(foldAll){
@@ -2168,7 +2291,7 @@ export async function initCommands(){
   const d = store.commands || {};
   commands = Array.isArray(d.commands) ? d.commands : [];
   automsgs = Array.isArray(d.automessages) ? d.automessages : [];
-  cfg = Object.assign({ autoPauseOffline:true }, d.cfg || {});
+  cfg = Object.assign({ autoPauseOffline:true, adWarnSeconds:60 }, d.cfg || {});
 
   // Old saves predate some fields; fill them in so the editor never reads
   // undefined and writes NaN back to disk.
@@ -2190,6 +2313,7 @@ export async function initCommands(){
   buildShell();
   setMode('commands');
   startAutoLoop();
+  startAdLoops();
 
   // Fire-and-forget: a slow or failed Twitch call must never hold up boot.
   checkScope().catch(()=>{});

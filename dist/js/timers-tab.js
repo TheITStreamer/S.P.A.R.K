@@ -7,7 +7,7 @@ const dialog = window.__TAURI__.dialog;
 
 // Each timer: {id, name, duration, mode:'down'|'up', font, color,
 //   startSound, endSound, endMessage, rewardId, anyRedeem, autoResume,
-//   _remaining, _running, _interval, wasRunning}
+//   hideWhenIdle, _remaining, _running, _interval, _doneAt, wasRunning}
 //
 // Auto timers additionally carry {auto:true, autoText, nameTemplate, autoRemove,
 // cfgId, cfgTitle, cfgColor}. Their number is NOT stored — it's derived from list
@@ -23,7 +23,7 @@ const CONFIG_DEFAULTS = {
   nameTemplate:'{text}', startMode:'immediate', // 'immediate' | 'command'
   font:'Roboto Mono', color:'#ffc83d', tagColor:'#ffc83d',
   startSound:null, endSound:null, endMessage:'',
-  maxConcurrent:10, autoRemove:true,
+  maxConcurrent:10, autoRemove:true, hideWhenIdle:false,
 };
 // Settings that apply across every config rather than per reward.
 const GLOBAL_DEFAULTS = { numberOverlay:true, chatConfirm:true, overallMax:20 };
@@ -65,7 +65,7 @@ function persist(){
       font:t.font, color:t.color,
       startSound:t.startSound, endSound:t.endSound,
       endMessage:t.endMessage, rewardId:t.rewardId, anyRedeem:t.anyRedeem,
-      autoResume:t.autoResume||false,
+      autoResume:t.autoResume||false, hideWhenIdle:t.hideWhenIdle||false,
       auto:t.auto||false, autoText:t.autoText||'',
       nameTemplate:t.nameTemplate||'', autoRemove:t.autoRemove||false,
       cfgId:t.cfgId||'', cfgTitle:t.cfgTitle||'', cfgColor:t.cfgColor||'',
@@ -82,11 +82,20 @@ function pushOverlay(){
   // `at` lets the overlay tick locally between pushes — SPARK only sends
   // state changes (start/pause/reset/finish), not one push per second.
   const now = Date.now();
-  const active = timers.map((t,i)=>({
-    id:t.id, name:overlayName(t,i), remaining:t._remaining, duration:t.duration,
-    mode:t.mode, font:t.font, color:t.color, running:t._running,
-    endMessage:t.endMessage, at: now,
-  }));
+  // "Only show while running" keeps an idle or paused timer off stream, but a
+  // timer that has just finished still goes out: the overlay lingers on it for
+  // ten seconds so the end message can be read.
+  // Numbering comes from list position across every timer, so the index is
+  // taken before the hidden ones are dropped.
+  const active = timers
+    .map((t,i)=>({ t, i }))
+    .filter(({t}) => !(t.hideWhenIdle && !t._running
+                       && !(t._doneAt && now - t._doneAt < 12000)))
+    .map(({t,i})=>({
+      id:t.id, name:overlayName(t,i), remaining:t._remaining, duration:t.duration,
+      mode:t.mode, font:t.font, color:t.color, running:t._running,
+      endMessage:t.endMessage, at: now,
+    }));
   invoke('timers_overlay_update',{ timers: active });
 }
 
@@ -128,6 +137,7 @@ function startTimer(t){
   if(t._running) return;
   if(t.startSound) playAudioFile(t.startSound);
   t._running=true;
+  t._doneAt=null;   // no longer in the post-finish window a hidden timer rides on
   // Timestamp-based ticking (like the pomodoro): a throttled/late interval
   // can't drift the clock — remaining is always derived from wall time, so
   // the app matches the overlay even if the window is minimized for minutes.
@@ -170,6 +180,7 @@ function pauseTimer(t){
 
 function resetTimer(t){
   pauseTimer(t);
+  t._doneAt=null;
   t._remaining = t.mode==='down' ? t.duration : 0;
   renderTimerCard(t); pushOverlay();
   persist();
@@ -190,6 +201,7 @@ window.addEventListener('spark-action', e => {
 
 function finishTimer(t){
   t._running=false; clearInterval(t._interval);
+  t._doneAt=Date.now();
   if(t.endSound) playAudioFile(t.endSound);
   pushOverlay();
   renderTimerCard(t);
@@ -241,6 +253,8 @@ function buildLeft(){
     <label class="checkrow"><input type="checkbox" id="tmAnyRedeem"> Any redeem starts this timer</label>
     <label class="checkrow mt"><input type="checkbox" id="tmAutoResume"> Auto-resume when SPARK opens</label>
     <div class="hint">Saves timer position between sessions and restarts automatically on open.</div>
+    <label class="checkrow mt"><input type="checkbox" id="tmHideIdle"> Only show on overlay while running</label>
+    <div class="hint">Keeps it off stream until it is counting. Paused hides it too. A finished timer still shows for ten seconds so its end message can be read.</div>
     <label class="hint">Or use chat command: <code>!timer &lt;name&gt;</code></label>
     <div class="row mt">
       <button class="btn-sm btn-gold full" id="tmAddBtn">＋ Add Timer</button>
@@ -567,6 +581,8 @@ function openConfigEditor(cfg){
         +'<div><label>Max timers from this config</label><input id="atEdMax" type="number" min="0" max="99" value="'+(cfg.maxConcurrent||0)+'" style="width:90px"><div style="font-size:.72rem;color:var(--muted);margin-top:3px">0 means no limit of its own</div></div>'
         +'<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;cursor:pointer"><input type="checkbox" id="atEdAutoRemove" '+(cfg.autoRemove?'checked':'')+'>  Remove once finished</label>'
       +'</div>'
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;cursor:pointer;margin-bottom:6px"><input type="checkbox" id="atEdHideIdle" '+(cfg.hideWhenIdle?'checked':'')+'>  Only show on overlay while running</label>'
+      +'<div style="font-size:.72rem;color:var(--muted);margin-bottom:16px">Timers from this config stay off stream until they are counting, which suits a config set to wait for !stm. A finished timer still shows for ten seconds so its end message can be read.</div>'
       +'<div style="display:flex;justify-content:flex-end;gap:8px">'
         +'<button id="atEdSave" style="font-family:inherit;cursor:pointer;border:none;border-radius:8px;font-size:.85rem;font-weight:600;padding:8px 14px;color:#2b1d00;background:#ffc83d">Save</button>'
         +'<button id="atEdCancel" style="'+btnG+'">Cancel</button>'
@@ -606,6 +622,7 @@ function openConfigEditor(cfg){
       cfg.endMessage   = document.getElementById('atEdEndMsg').value.trim();
       cfg.maxConcurrent= Math.max(0, parseInt(document.getElementById('atEdMax').value) || 0);
       cfg.autoRemove   = document.getElementById('atEdAutoRemove').checked;
+      cfg.hideWhenIdle = document.getElementById('atEdHideIdle').checked;
       cfg.startSound   = startSfx;
       cfg.endSound     = endSfx;
       loadGoogleFont(cfg.font);
@@ -613,6 +630,7 @@ function openConfigEditor(cfg){
       // the duration they were created with rather than jumping mid-countdown.
       timers.filter(t=>t.cfgId===cfg.id).forEach(t=>{
         t.cfgTitle=cfg.title; t.cfgColor=cfg.tagColor; t.nameTemplate=cfg.nameTemplate;
+        t.hideWhenIdle=cfg.hideWhenIdle;
       });
       modal.remove();
       renderConfigList(); renderActiveList(); pushOverlay(); persist();
@@ -651,7 +669,8 @@ function spawnAutoTimer(cfg, text){
     font:cfg.font, color:cfg.color,
     startSound:cfg.startSound, endSound:cfg.endSound,
     endMessage:cfg.endMessage, rewardId:'', anyRedeem:false, autoResume:false,
-    _remaining:cfg.duration, _running:false, _interval:null,
+    hideWhenIdle:!!cfg.hideWhenIdle,
+    _remaining:cfg.duration, _running:false, _interval:null, _doneAt:null,
   };
   timers.push(t);
   loadGoogleFont(t.font);
@@ -747,11 +766,12 @@ function addTimer(){
   const rewardId=$('tmRewardSelect').value||'';
   const anyRedeem=$('tmAnyRedeem').checked;
   const autoResume=$('tmAutoResume').checked;
+  const hideWhenIdle=$('tmHideIdle').checked;
   const t={
     id:uid(), name, duration:dur, mode, font, color,
     startSound:tmStartSoundFile, endSound:tmEndSoundFile,
-    endMessage:endMsg, rewardId, anyRedeem, autoResume,
-    _remaining:mode==='down'?dur:0, _running:false, _interval:null,
+    endMessage:endMsg, rewardId, anyRedeem, autoResume, hideWhenIdle,
+    _remaining:mode==='down'?dur:0, _running:false, _interval:null, _doneAt:null,
   };
   timers.push(t);
   loadGoogleFont(font);
@@ -770,6 +790,7 @@ function savePreset(){
     startSound:tmStartSoundFile, endSound:tmEndSoundFile,
     rewardId:$('tmRewardSelect').value||'', anyRedeem:$('tmAnyRedeem').checked,
     autoResume:$('tmAutoResume').checked,
+    hideWhenIdle:$('tmHideIdle').checked,
   };
   savedTimers.push(preset);
   persist();
@@ -791,7 +812,7 @@ function renderPresets(){
   el.querySelectorAll('button[data-pi]').forEach(btn=>{
     btn.addEventListener('click',()=>{
       const p={...savedTimers[+btn.dataset.pi]};
-      const t={...p,id:uid(),_remaining:p.mode==='down'?p.duration:0,_running:false,_interval:null};
+      const t={...p,id:uid(),_remaining:p.mode==='down'?p.duration:0,_running:false,_interval:null,_doneAt:null};
       timers.push(t); loadGoogleFont(t.font); renderActiveList(); persist();
     });
   });
@@ -841,6 +862,9 @@ function renderTimerCard(t){
     </div>
     <label class="checkrow" style="font-size:.78rem;margin-top:6px">
       <input type="checkbox" data-act="autoresume" ${t.autoResume?'checked':''}> Auto-resume when SPARK opens
+    </label>
+    <label class="checkrow" style="font-size:.78rem">
+      <input type="checkbox" data-act="hideidle" ${t.hideWhenIdle?'checked':''}> Only show on overlay while running
     </label>`;
   card.querySelectorAll('button[data-act]').forEach(btn=>{
     btn.addEventListener('click',()=>{
@@ -853,6 +877,8 @@ function renderTimerCard(t){
   });
   const arCb=card.querySelector('[data-act="autoresume"]');
   if(arCb) arCb.addEventListener('change',()=>{ t.autoResume=arCb.checked; persist(); });
+  const hiCb=card.querySelector('[data-act="hideidle"]');
+  if(hiCb) hiCb.addEventListener('change',()=>{ t.hideWhenIdle=hiCb.checked; pushOverlay(); persist(); });
   renderRightPreview();
 }
 

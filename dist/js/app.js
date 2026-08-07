@@ -294,6 +294,12 @@ const HELP_CONTENT = {
       + '<h3>Raids, Follows, Subs And Cheers</h3>'
       + '<p>A command does not have to be typed by anyone. Under <strong>Also run automatically when…</strong> you can set it to fire when somebody raids you, follows, subscribes, gifts subs or cheers.</p>'
       + '<p>The person who did it becomes <code>{user}</code>, and because <code>{targetavatar}</code>, <code>{targetusername}</code>, <code>{targetfollowage}</code> and <code>{targetaccountage}</code> follow them too, a raid can put the raider\'s face on your overlay with no extra work. <code>{raiders}</code> is how many people they brought; <code>{amount}</code> covers bits cheered or subs gifted.</p>'
+      + '<h3>Ad Breaks</h3>'
+      + '<p>The same list has three ad triggers: <strong>Ads are coming up</strong>, <strong>Ads start</strong> and <strong>Ads finish</strong>. They are separate on purpose, so you can warn chat, say something as the break begins, and welcome people back — or use only the one you want.</p>'
+      + '<p><code>{adduration}</code> is how many seconds the break runs for. <code>{adnextin}</code> is how long until it starts, which only means anything on the warning.</p>'
+      + '<p>Set how far ahead the warning fires in the <strong>Warn … seconds before an ad break</strong> box. There is one ad schedule, so that setting is shared by every command.</p>'
+      + '<p>Two things worth knowing, both down to what Twitch does and does not tell an app. Twitch has no “an ad is coming” event, so SPARK watches your ad schedule instead — if you snooze a break after the warning has already gone out, chat has been told about an ad that is no longer coming. And nothing reports that a break has ended, so <strong>Ads finish</strong> is worked out from the start time plus the length Twitch reported. A break you cut short by hand will finish a little late.</p>'
+      + '<p>These need a Twitch permission added in this release. If a warning appears at the top of the tab, go to <strong>Settings</strong>, click <strong>Log out</strong>, then connect again — a plain reconnect reuses the old permissions.</p>'
       + '<p>Nobody types anything for these, so cooldowns and permission do not apply. The starter pack includes a ready-made <code>!raidthanks</code> that thanks the raider in chat and shows their picture on stream.</p>'
       + '<h3>When A Command Is Active</h3>'
       + '<p><strong>Active</strong> can limit a command to while you are live, or while you are offline. <strong>Only in these categories</strong> limits it to certain games — comma separated, matched loosely, so "zelda" catches "The Legend of Zelda". A command that is out of season stays silent rather than replying with an excuse.</p>'
@@ -574,6 +580,11 @@ async function boot(){
   });
   await listen('twitch-goal', ev=>{
     window.dispatchEvent(new CustomEvent('spark-goal', {detail: ev.payload}));
+  });
+  // Ad break started. Only the start is a real Twitch event; the Commands tab
+  // derives the warning and the finish from this plus the ad schedule.
+  await listen('twitch-ad', ev=>{
+    window.dispatchEvent(new CustomEvent('spark-ad', {detail: ev.payload}));
   });
   // Chat sends are queued in Rust, so a failure arrives as this event rather
   // than as a rejected invoke().

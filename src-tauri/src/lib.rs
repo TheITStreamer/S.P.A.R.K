@@ -612,6 +612,7 @@ pub fn run() {
             twitch::twitch_get_user_by_login,
             twitch::twitch_get_followage,
             twitch::twitch_get_sub_count,
+            twitch::twitch_get_ad_schedule,
         ])
         .run(tauri::generate_context!())
         .expect("error running SPARK");

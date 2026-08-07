@@ -24,3 +24,4 @@ CHANGELOG-post*.md
 Current_Build.txt
 Current_Build_ARCHIVE*.txt
 TEST_CHECKLIST.txt
+h --force -u origin main

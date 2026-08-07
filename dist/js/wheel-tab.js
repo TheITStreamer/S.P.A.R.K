@@ -28,6 +28,24 @@ const ctx    = ()=> canvas().getContext('2d');
 
 function colors(){ return state.customColors?.length ? state.customColors : (THEMES[state.themeName]||THEMES['Neon']); }
 
+// The full list is the master copy that "Reset to full list" restores from.
+// Manual edits — reorder, weight, add — belong in it, while an item taken off
+// by a spin does not, which is the whole point of Reset. So rather than
+// overwriting one with the other, the two are kept in step: slots holding a
+// name that is still on the wheel take the next wheel item (so the order and
+// weights follow the wheel), slots holding a spun-off winner keep their place,
+// and names the full list has never seen are appended.
+function syncFull(){
+  const known     = new Set(state.fullItems.map(f=>f.name));
+  const liveNames = new Set(state.items.map(i=>i.name));
+  const ordered   = state.items.filter(i=>known.has(i.name)).map(x=>({...x}));
+  let k = 0;
+  const out = state.fullItems.map(f =>
+    (liveNames.has(f.name) && ordered[k]) ? ordered[k++] : {...f});
+  state.items.filter(i=>!known.has(i.name)).forEach(i=>out.push({...i}));
+  state.fullItems = out;
+}
+
 // ── Persist ────────────────────────────────────────────────────────────────────
 let saveTimer = null;
 function persist(){
@@ -87,6 +105,7 @@ function renderItemList(){
   initDrag(el,(src,dest)=>{
     const moved=state.items.splice(src,1)[0];
     state.items.splice(dest,0,moved);
+    syncFull();
     render();
   });
 }
@@ -328,12 +347,11 @@ function wireWheelEvents(){
   $('wAppendBtn').addEventListener('click',()=>{
     $('wBulkInput').value.split('\n').map(s=>s.trim()).filter(Boolean).forEach(n=>{
       state.items.push({name:n,weight:1});
-      if(!state.fullItems.find(x=>x.name===n)) state.fullItems.push({name:n,weight:1});
-    }); render();
+    }); syncFull(); render();
   });
   $('wQuickAddBtn').addEventListener('click',quickAdd);
   $('wQuickAdd').addEventListener('keydown',e=>{ if(e.key==='Enter') quickAdd(); });
-  function quickAdd(){ const v=$('wQuickAdd').value.trim();if(!v)return;state.items.push({name:v,weight:1});if(!state.fullItems.find(x=>x.name===v))state.fullItems.push({name:v,weight:1});$('wQuickAdd').value='';render(); }
+  function quickAdd(){ const v=$('wQuickAdd').value.trim();if(!v)return;state.items.push({name:v,weight:1});syncFull();$('wQuickAdd').value='';render(); }
   $('wResetBtn').addEventListener('click',()=>{
     if(!state.fullItems.length){alert('No full list saved yet.');return;}
     state.items=state.fullItems.map(x=>({...x}));pendingRemoval=null;$('wheelWinner').innerHTML='';render();
@@ -355,7 +373,14 @@ function wireWheelEvents(){
       if(old>1&&w<1) w=1;
       state.items[i].weight=w;
     }
-    else if(act==='del') state.items.splice(i,1);
+    else if(act==='del'){
+      // Removing an item by hand is a decision, so it leaves the full list too.
+      // Reset brings back spin winners, not items you took off on purpose.
+      const gone=state.items[i].name;
+      state.items.splice(i,1);
+      state.fullItems=state.fullItems.filter(x=>x.name!==gone);
+    }
+    syncFull();
     render();
   });
   // theme

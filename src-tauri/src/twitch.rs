@@ -8,7 +8,7 @@ use crate::Shared;
 // Scopes requested for the broadcaster token. A saved token only carries the
 // scopes it was granted, so twitch_token_scopes() lets Settings compare the two
 // and prompt for a reconnect when this list has grown.
-const SCOPES: &str = "channel:read:redemptions channel:manage:redemptions channel:read:subscriptions moderator:read:followers bits:read chat:read user:write:chat moderator:manage:announcements";
+const SCOPES: &str = "channel:read:redemptions channel:manage:redemptions channel:read:subscriptions moderator:read:followers bits:read chat:read user:write:chat moderator:manage:announcements channel:read:ads";
 
 // Scopes for an optional bot account. Deliberately minimal: the bot only ever
 // SENDS. Reading chat, EventSub and redeems all stay on the broadcaster token.
@@ -603,6 +603,11 @@ fn run_eventsub(app: &tauri::AppHandle, stop: std::sync::Arc<std::sync::atomic::
                             let _ = subscribe(access, client_id, &sid, "channel.subscription.message", "1", json!({"broadcaster_user_id":uid}));
                             let _ = subscribe(access, client_id, &sid, "channel.bits.use", "1", json!({"broadcaster_user_id":uid}));
                             let _ = subscribe(access, client_id, &sid, "channel.raid", "1", json!({"to_broadcaster_user_id":uid}));
+                            // Ad breaks. Twitch announces the START of a break and
+                            // nothing else: there is no "ads are coming" event and no
+                            // "ads finished" event, so the frontend derives those two
+                            // from the ad schedule and from start + duration.
+                            let _ = subscribe(access, client_id, &sid, "channel.ad_break.begin", "1", json!({"broadcaster_user_id":uid}));
                         }
                         "session_reconnect" => {
                             reconnect_url = v["payload"]["session"]["reconnect_url"].as_str().map(|s| s.to_string());
@@ -684,6 +689,17 @@ fn run_eventsub(app: &tauri::AppHandle, stop: std::sync::Arc<std::sync::atomic::
                                     "kind": "raid",
                                     "user_name": ev["from_broadcaster_user_name"],
                                     "amount": viewers,
+                                }));
+                            }
+                            // Ad break started. duration_seconds is how long Twitch
+                            // says the break runs for, which is what the "ads finish"
+                            // trigger counts down from.
+                            if sub_type == "channel.ad_break.begin" {
+                                let _ = app.emit("twitch-ad", json!({
+                                    "kind": "begin",
+                                    "duration": ev["duration_seconds"],
+                                    "is_automatic": ev["is_automatic"],
+                                    "started_at": ev["started_at"],
                                 }));
                             }
                         }
@@ -1317,6 +1333,44 @@ pub async fn twitch_get_sub_count(app: tauri::AppHandle) -> Result<u64, String> 
         if !r.status().is_success() { return Ok(0); }
         let v: Value = r.json().map_err(|e| e.to_string())?;
         Ok(v.get("total").and_then(|x| x.as_u64()).unwrap_or(0))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// ── Ad schedule ───────────────────────────────────────────────────────────────
+// Twitch has no "an ad is coming" event, so the only way to warn ahead of one
+// is to ask when the next break is due and watch the clock. next_ad_at comes
+// back as an RFC3339 timestamp, or an epoch-zero placeholder when nothing is
+// scheduled — the frontend treats anything in the past as "no ad due".
+//
+// Needs channel:read:ads, which older logins do not carry, so a plain error is
+// returned rather than a panic and the Commands tab shows its reconnect banner.
+#[tauri::command]
+pub async fn twitch_get_ad_schedule(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.get("https://api.twitch.tv/helix/channels/ads")
+            .query(&[("broadcaster_id", uid.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        let v: Value = r.json().unwrap_or(json!({}));
+        if !status.is_success() {
+            return Err(v.get("message").and_then(|x| x.as_str())
+                .unwrap_or("Ad schedule lookup failed").to_string());
+        }
+        let d = v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()).cloned()
+            .unwrap_or(json!({}));
+        Ok(json!({
+            "next_ad_at":        d.get("next_ad_at").cloned().unwrap_or(Value::Null),
+            "last_ad_at":        d.get("last_ad_at").cloned().unwrap_or(Value::Null),
+            "duration":          d.get("duration").cloned().unwrap_or(Value::Null),
+            "preroll_free_time": d.get("preroll_free_time").cloned().unwrap_or(Value::Null),
+            "snooze_count":      d.get("snooze_count").cloned().unwrap_or(Value::Null),
+        }))
     }).await.map_err(|e| e.to_string())?
 }
 

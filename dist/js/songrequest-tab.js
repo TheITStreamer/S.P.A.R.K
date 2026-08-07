@@ -475,47 +475,27 @@ async function fetchQueueTitles() {
 
 async function requestSong(url, requester, userId, isHost, isRedeem, redemptionId) {
   slog('sr', 'request "' + url + '" by ' + requester + (isRedeem ? ' [redeem]' : '') + (isHost ? ' [host]' : ''));
-  let videoId = extractVideoId(url);
-  if (!videoId) videoId = await searchVideoId(url.trim());
-  if (!videoId) {
-    slog('sr', 'REJECTED: no videoId resolved');
-    sendChatMsg(cfg.chatMsgBadUrl, { username: requester });
-    refundRedemption(redemptionId, 'bad url');
-    return;
-  }
-  // Blocked check, stage 1 (by id). Deliberately FIRST: a blocked song is a
-  // hard no, so it must not consume the viewer's cooldown on the way out.
-  // Stage 2 (by title) runs in fetchQueueTitles once the real title lands —
-  // see isBlocked() for why an id check alone isn't enough.
-  if (isBlocked(videoId, '')) {
-    slog('sr', 'REJECTED: blocked vid=' + videoId);
-    sendChatMsg(cfg.chatMsgBlocked, { username: requester, song: blockedLabel(videoId, '') });
-    refundRedemption(redemptionId, 'blocked song');
-    return;
-  }
-  if (queue.length >= cfg.maxQueueSize) {
-    slog('sr', 'REJECTED: queue full (' + queue.length + '/' + cfg.maxQueueSize + ')');
-    refundRedemption(redemptionId, 'queue full');
-    return;
-  }
 
-  if (!isHost && cfg.maxPerUser > 0 && userId) {
-    const userCount = queue.filter(q => q.userId === userId).length;
-    if (userCount >= cfg.maxPerUser) {
-      slog('sr', 'REJECTED: per-user limit (' + userCount + '/' + cfg.maxPerUser + ')');
-      sendChatMsg(cfg.chatMsgPerUser, { username: requester, count: userCount, max: cfg.maxPerUser });
-      refundRedemption(redemptionId, 'per-user limit');
-      return;
-    }
-  }
-
-  if (!isHost && userId && cfg.srCooldownSeconds > 0) {
+  // The cooldown slot is CLAIMED HERE, before the video id is resolved.
+  // Resolving a song title means a network round trip, and two requests from
+  // the same viewer — an !sr and a redeem, in either order — would both sail
+  // past a check made after it, each reading the timestamp before the other had
+  // written it. Claiming the slot first closes that window. A request that is
+  // rejected further down hands the slot straight back via releaseCooldown(),
+  // so a bad link or a blocked song still costs the viewer nothing.
+  const gated        = !isHost && !!userId && cfg.srCooldownSeconds > 0;
+  const prevCooldown = gated ? (srCooldowns[userId] || 0) : 0;
+  const releaseCooldown = () => {
+    if (!gated) return;
+    if (prevCooldown) srCooldowns[userId] = prevCooldown;
+    else delete srCooldowns[userId];
+  };
+  if (gated) {
     // A redeem is only exempt from the CHECK when the setting says so — but it
-    // always STARTS the cooldown below. Without both, !sr and the redeem could
-    // be combined to skirt the time limit in either order.
+    // always claims the slot below. Without both, !sr and the redeem could be
+    // combined to skirt the time limit in either order.
     const exempt  = isRedeem && cfg.cooldownIncludesRedeems === false;
-    const last    = srCooldowns[userId] || 0;
-    const elapsed = (Date.now() - last) / 1000;
+    const elapsed = (Date.now() - prevCooldown) / 1000;
     if (!exempt && elapsed < cfg.srCooldownSeconds) {
       const remaining = Math.ceil((cfg.srCooldownSeconds - elapsed) / 60);
       slog('sr', 'REJECTED: cooldown' + (isRedeem ? ' [redeem]' : '') + ', ' + Math.round(cfg.srCooldownSeconds - elapsed) + 's left');
@@ -528,6 +508,44 @@ async function requestSong(url, requester, userId, isHost, isRedeem, redemptionI
       if (Date.now() - srCooldowns[k] > cfg.srCooldownSeconds * 1000) delete srCooldowns[k];
     }
     srCooldowns[userId] = Date.now();
+  }
+
+  let videoId = extractVideoId(url);
+  if (!videoId) videoId = await searchVideoId(url.trim());
+  if (!videoId) {
+    slog('sr', 'REJECTED: no videoId resolved');
+    releaseCooldown();
+    sendChatMsg(cfg.chatMsgBadUrl, { username: requester });
+    refundRedemption(redemptionId, 'bad url');
+    return;
+  }
+  // Blocked check, stage 1 (by id). A blocked song is a hard no, so it hands
+  // the cooldown slot back on the way out. Stage 2 (by title) runs in
+  // fetchQueueTitles once the real title lands — see isBlocked() for why an id
+  // check alone isn't enough.
+  if (isBlocked(videoId, '')) {
+    slog('sr', 'REJECTED: blocked vid=' + videoId);
+    releaseCooldown();
+    sendChatMsg(cfg.chatMsgBlocked, { username: requester, song: blockedLabel(videoId, '') });
+    refundRedemption(redemptionId, 'blocked song');
+    return;
+  }
+  if (queue.length >= cfg.maxQueueSize) {
+    slog('sr', 'REJECTED: queue full (' + queue.length + '/' + cfg.maxQueueSize + ')');
+    releaseCooldown();
+    refundRedemption(redemptionId, 'queue full');
+    return;
+  }
+
+  if (!isHost && cfg.maxPerUser > 0 && userId) {
+    const userCount = queue.filter(q => q.userId === userId).length;
+    if (userCount >= cfg.maxPerUser) {
+      slog('sr', 'REJECTED: per-user limit (' + userCount + '/' + cfg.maxPerUser + ')');
+      releaseCooldown();
+      sendChatMsg(cfg.chatMsgPerUser, { username: requester, count: userCount, max: cfg.maxPerUser });
+      refundRedemption(redemptionId, 'per-user limit');
+      return;
+    }
   }
 
   const wasEmpty = queue.length === 0;
