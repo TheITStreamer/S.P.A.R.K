@@ -3,11 +3,12 @@ import { $, esc, renderOverlayBar, initDrag } from './utils.js';
 import {
   defaultCfg, deepMerge, applyPreset, PRESETS,
   SECTION_KEYS, SECTION_LABELS, AUTO_SECTION_KEYS,
-  GOOGLE_FONTS, BACKGROUNDS, BACKGROUND_LABELS,
+  BACKGROUNDS, BACKGROUND_LABELS,
   NAME_ORDERS, NAME_ORDER_LABELS, SCROLL_DIRS, SCROLL_DIR_LABELS,
   DOCKS, DOCK_LABELS,
 } from './credits-defaults.js';
 import { playSound as playAudioFile } from './audio.js';
+import { fontChoices } from './fonts.js';
 
 const { invoke } = window.__TAURI__.core;
 const dialog = window.__TAURI__.dialog;
@@ -317,7 +318,7 @@ function sectionCardHtml(key){
       ${field('Name colour', colorInput('crNc_'+key, s.nameColor))}
       ${field('Name size', numInput('crNs_'+key, s.nameSize, 8, 48, 1))}
     </div>
-    <div class="mt">${field('Font (blank = use global font)', selectInput('crFont_'+key, [{v:'',l:'(use global font)'}, ...GOOGLE_FONTS.map(f=>({v:f,l:f}))], s.font||''))}</div>
+    <div class="mt">${field('Font (blank = use global font)', selectInput('crFont_'+key, fontChoices({ blank:'(use global font)' }), s.font||''))}</div>
     <div class="mt">${checkInput('crDiv_'+key, s.divider, 'Show divider line above this section')}</div>
     ${isSpecial ? `
       <label class="mt">Special Thanks messages (one per line, free text, not tied to chat)</label>
@@ -398,7 +399,7 @@ function generalSettingsHtml(){
   <div class="card">
     <h2>Layout &amp; Background</h2>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      ${field('Font', selectInput('crFont', GOOGLE_FONTS.map(f=>({v:f,l:f})), l.font))}
+      ${field('Font', selectInput('crFont', fontChoices(), l.font))}
       ${field('Alignment', selectInput('crAlign', [{v:'left',l:'Left'},{v:'center',l:'Centre'},{v:'right',l:'Right'}], l.align))}
       ${field('Width (px)', numInput('crWidth', l.width, 300, 1400, 10))}
       ${field('Background style', selectInput('crBg', BACKGROUNDS.map(b=>({v:b,l:BACKGROUND_LABELS[b]})), l.bg))}
@@ -561,7 +562,7 @@ function playCredits(sampleMode){
 }
 
 // ── Twitch chat tracking ─────────────────────────────────────────────────────
-// Shared persistent cache (store.settings.followerCache) — same one chat uses.
+// Same cache the Chat tab uses — one copy in Rust, mirrored in store.js.
 async function checkFollower(userId){
   if(!userId) return false;
   const c = cachedFollower(userId);
@@ -569,7 +570,7 @@ async function checkFollower(userId){
   if(!store.twitch.userId) return false;
   try{
     const r = await invoke('twitch_check_follower', { userId, broadcasterId: store.twitch.userId });
-    setCachedFollower(userId, !!r);
+    setCachedFollower(userId, !!r, { fromApi:true });
     return !!r;
   }catch(e){ return false; }
 }
@@ -617,6 +618,19 @@ function twitchStatusHandler(e){
   hasResetThisBoot = true;
   clearSession();
 }
+
+// A genuinely new stream starts a fresh chatter roster, which is what the
+// credits are for. Connecting Twitch is a weaker signal — it happens on every
+// launch, including one mid-stream — so this is the more accurate trigger and
+// the connect-time reset above stays as the fallback for when SPARK is opened
+// after the stream is already running.
+//
+// Only fires for a real new stream: a dropped connection that comes straight
+// back is filtered out in app.js, so a blip cannot wipe the roster mid-stream.
+window.addEventListener('spark-stream-start', ()=>{
+  hasResetThisBoot = true;
+  clearSession();
+});
 
 // ── Assemble left column ────────────────────────────────────────────────────
 function buildLeft(){

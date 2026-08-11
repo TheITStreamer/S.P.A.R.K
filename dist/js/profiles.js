@@ -3,10 +3,15 @@
 // wheel lists, timers, goals, which tools are switched on, and so on. Swap
 // profile and the whole app becomes that setup.
 //
-// The active profile's `data` slot is deliberately empty. Its data IS the live
+// The active profile's snapshot is deliberately absent. Its data IS the live
 // data on disk, which is what makes "the active profile updates automatically"
 // free: there is nothing to intercept on every save, because there is no second
-// copy to keep in step. Only inactive profiles carry a stored snapshot.
+// copy to keep in step. Only inactive profiles have a stored snapshot.
+//
+// Snapshots live in their own files (profiles\<id>.json), NOT in settings.
+// They used to sit inline in settings.profiles[].data, which meant every
+// settings save re-wrote every profile the user owns. settings now carries
+// only {id, name} per profile.
 //
 // Switching reloads the window. Tab modules keep internal state that never
 // resets (initTimers appends restored timers rather than replacing them, for
@@ -142,7 +147,6 @@ export async function ensureBootstrapped(){
   if(list.length && activeProfile()) return false;
   if(!list.length) list.push({ id: uid(), name: 'Default', data: null });
   store.settings.activeProfileId = list[0].id;
-  list[0].data = null;
   await invoke('save_app_settings', { data: store.settings });
   return true;
 }
@@ -159,7 +163,10 @@ export function uniqueName(base){
 // snapshot: every tab falls back to its own defaults when its data is empty.
 export async function createProfile(name, copyCurrent){
   const snap = copyCurrent ? await snapshotCurrent() : {};
-  const p = { id: uid(), name: uniqueName(name || 'New Profile'), data: snap };
+  const p = { id: uid(), name: uniqueName(name || 'New Profile'), data: null };
+  // Snapshot file first: if this throws, no half-made profile is left in the
+  // list pointing at a file that was never written.
+  await invoke('save_profile_data', { id: p.id, data: snap });
   profiles().push(p);
   await invoke('save_app_settings', { data: store.settings });
   return p;
@@ -173,10 +180,13 @@ export async function renameProfile(id, name){
 
 export async function duplicateProfile(id){
   const p = profiles().find(x=>x.id===id); if(!p) return null;
-  // Duplicating the active profile has to snapshot live data, since its own
-  // slot is empty by design.
-  const data = (p.id===activeProfileId()) ? await snapshotCurrent() : clone(p.data);
-  const copy = { id: uid(), name: uniqueName(p.name+' copy'), data: data || {} };
+  // Duplicating the active profile has to snapshot live data, since it has no
+  // stored snapshot by design.
+  const data = (p.id===activeProfileId())
+    ? await snapshotCurrent()
+    : (await invoke('load_profile_data', { id: p.id })) || {};
+  const copy = { id: uid(), name: uniqueName(p.name+' copy'), data: null };
+  await invoke('save_profile_data', { id: copy.id, data: data || {} });
   profiles().push(copy);
   await invoke('save_app_settings', { data: store.settings });
   return copy;
@@ -188,6 +198,9 @@ export async function deleteProfile(id){
   if(id===activeProfileId()) return { ok:false, reason:'Switch to another profile before deleting this one.' };
   store.settings.profiles = list.filter(p=>p.id!==id);
   await invoke('save_app_settings', { data: store.settings });
+  // Settings first — an orphaned file is harmless, a list entry pointing at a
+  // deleted file is not.
+  await invoke('delete_profile_data', { id }).catch(()=>{});
   return { ok:true };
 }
 
@@ -202,12 +215,17 @@ export async function switchProfile(id){
 
   const outgoing = activeProfile();
   const snap = await snapshotCurrent();
-  if(outgoing) outgoing.data = snap;
+  // Park the outgoing profile's data BEFORE anything is overwritten, so an
+  // interrupted switch still leaves both setups intact.
+  if(outgoing) await invoke('save_profile_data', { id: outgoing.id, data: snap });
 
-  const incoming = clone(target.data) || {};
+  const incoming = (await invoke('load_profile_data', { id: target.id })) || {};
   store.settings.activeProfileId = target.id;
-  target.data = null;                       // it is the live one now
   await invoke('save_app_settings', { data: store.settings });
+  // The incoming profile is the live one now, so its stored snapshot is stale
+  // by definition. Dropping it mirrors the old `target.data = null` and keeps a
+  // backup from carrying a copy that contradicts the live data.
+  await invoke('delete_profile_data', { id: target.id }).catch(()=>{});
 
   // No explicit flush needed: every save_* command calls do_save, so the file
   // is already written by the time applySnapshot returns.

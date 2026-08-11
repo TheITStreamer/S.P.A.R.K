@@ -1,5 +1,6 @@
 import { store, toolBlocked } from './store.js';
 import { $, esc, flash, renderOverlayBar } from './utils.js';
+import { fontOptionsHtml } from './fonts.js';
 import { initPomodoro, renderPomodoroUI, pomoData, pomoTasksChanged } from './pomodoro.js';
 
 const { invoke } = window.__TAURI__.core;
@@ -30,28 +31,10 @@ let cfg = {
 let tasks = [];
 let nextNum = 1;
 
-const FONT_OPTIONS = [
-  ['', 'Default (System)'],
-  ['Inter','Inter'], ['Roboto','Roboto'], ['Open Sans','Open Sans'],
-  ['Montserrat','Montserrat'], ['Poppins','Poppins'], ['Oswald','Oswald'],
-  ['Raleway','Raleway'], ['Nunito','Nunito'], ['Rubik','Rubik'],
-  ['Barlow','Barlow'], ['Kanit','Kanit'], ['Teko','Teko'],
-  ['Archivo Black','Archivo Black'], ['Anton','Anton'], ['Bebas Neue','Bebas Neue'],
-  ['Righteous','Righteous'], ['Bangers','Bangers'], ['Fredoka','Fredoka'],
-  ['Comfortaa','Comfortaa'], ['Permanent Marker','Permanent Marker'], ['Pacifico','Pacifico'],
-  ['Dancing Script','Dancing Script'], ['Caveat','Caveat'], ['Russo One','Russo One'],
-  ['Orbitron','Orbitron'], ['Press Start 2P','Press Start 2P'], ['Playfair Display','Playfair Display'],
-];
-
-let fontsPreloaded = false;
-function preloadFontOptions(){
-  if(fontsPreloaded) return; fontsPreloaded=true;
-  const families = FONT_OPTIONS.filter(([v])=>v).map(([v])=>`family=${encodeURIComponent(v)}`).join('&');
-  const link=document.createElement('link');
-  link.rel='stylesheet';
-  link.href=`https://fonts.googleapis.com/css2?${families}&display=swap`;
-  document.head.appendChild(link);
-}
+// The font list and its stylesheet both moved to fonts.js, which loads every
+// built-in family once for the whole app. Kept as a no-op so the existing call
+// sites do not need touching.
+function preloadFontOptions(){}
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function deepMerge(target, source){
@@ -373,7 +356,7 @@ function buildLeft(){
       <h3 style="margin:12px 0 4px;font-size:.85rem">Global overlay</h3>
       <div class="row mt"><label style="flex:1">Font family</label>
         <select id="tkOverlayFont" style="min-width:160px">
-          ${FONT_OPTIONS.map(([v,l])=>`<option value="${v}" style="font-family:'${v||'inherit'}'"${cfg.overlay.font===v?' selected':''}>${l}</option>`).join('')}
+          ${fontOptionsHtml(cfg.overlay.font, { blank:'Default (System)' })}
         </select>
       </div>
       <div class="row mt"><label style="flex:1">Row spacing (px)</label><input type="number" id="tkRowSpacing" value="${cfg.overlay.rowSpacing}" min="0" max="30" style="width:70px"></div>

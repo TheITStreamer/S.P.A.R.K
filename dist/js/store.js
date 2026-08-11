@@ -12,6 +12,7 @@ export const store = {
   credits: {},
   commands: { commands:[], automessages:[], cfg:{} },
   settings: {},
+  broadcast: {},
   twitch_tokens: {},
   overlayUrls: {},
   twitch: { connected:false, userId:'', login:'', clientId:'' },
@@ -69,42 +70,41 @@ export function saveIgnoreList(){
   window.dispatchEvent(new CustomEvent('spark-ignorelist'));
 }
 
-// ── Persistent follower cache ───────────────────────────────────────────────
-// userId -> [isFollower(0|1), cachedAtMs], stored in settings so it survives
-// restarts. Lets chat forward messages instantly (no per-message API wait) —
-// at worst a viewer's very first message ever renders in the default style.
-// 3-day TTL: long enough to cover restarts, short enough that an unfollow
-// doesn't keep follower styling forever.
-const FOLLOW_TTL_MS = 3*24*3600*1000;
-let followSaveTimer = null;
+// ── Follower cache (read mirror) ─────────────────────────────────────────────
+// The cache itself lives in Rust now, in its own file. This is a plain in-memory
+// copy of it, loaded once at boot, because chat has to decide a message's style
+// the instant it arrives and cannot wait on a round-trip per chatter.
+//
+// It used to be the other way round: the frontend owned a persistent cache
+// stored inside settings, which meant every new chatter rewrote the whole data
+// file — profile snapshots and all — a few seconds later.
+//
+// No TTL here. Rust drops expired entries when it loads the file and when it
+// hands this over, so anything in the mirror is already fresh.
 
-function followMap(){
-  if(!store.settings.followerCache || typeof store.settings.followerCache !== 'object') store.settings.followerCache = {};
-  return store.settings.followerCache;
+let followMirror = {};   // userId -> true/false
+
+export async function loadFollowerMirror(){
+  try{
+    followMirror = await window.__TAURI__.core.invoke('follower_cache_all') || {};
+  }catch(e){ followMirror = {}; }
 }
 
-// true / false when cached and fresh, undefined when unknown.
+// true / false when known, undefined when we have never checked this user.
 export function cachedFollower(userId){
   if(!userId) return undefined;
-  const e = followMap()[userId];
-  if(!e) return undefined;
-  if(Date.now() - (e[1]||0) > FOLLOW_TTL_MS){ delete followMap()[userId]; return undefined; }
-  return !!e[0];
+  const v = followMirror[userId];
+  return v === undefined ? undefined : !!v;
 }
 
-export function setCachedFollower(userId, val){
+// Called when SPARK learns someone's follower status. Two paths reach here:
+// a completed API check (Rust has already cached it — the mirror just needs to
+// agree) and a live follow event (Rust has not, so tell it).
+export function setCachedFollower(userId, val, opts){
   if(!userId) return;
-  const m = followMap();
-  // prune expired entries when the map gets big
-  if(Object.keys(m).length > 2000){
-    const now = Date.now();
-    for(const k in m){ if(now - (m[k][1]||0) > FOLLOW_TTL_MS) delete m[k]; }
-  }
-  m[userId] = [val?1:0, Date.now()];
-  clearTimeout(followSaveTimer);
-  followSaveTimer = setTimeout(()=>{
-    window.__TAURI__.core.invoke('save_app_settings', { data: store.settings }).catch(()=>{});
-  }, 5000);
+  followMirror[userId] = !!val;
+  if(opts && opts.fromApi) return;   // Rust cached it as part of the check
+  window.__TAURI__.core.invoke('note_follower', { userId, isFollower: !!val }).catch(()=>{});
 }
 
 // ── Master overlay membership ───────────────────────────────────────────────

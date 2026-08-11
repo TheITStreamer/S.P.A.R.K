@@ -12,6 +12,9 @@ it was good, I went with it.
 
 ## What it does
 
+* **Broadcast** - your title, category and tags without leaving SPARK, with saved presets that set all three at once. Live chat with timeout, ban, delete and pin. Raid, shoutout, polls and predictions with saved templates. Emote only, subs only and followers only chat, ad breaks and snooze.
+<!-- SCREENSHOT NEEDED: Broadcast tab -->
+
 * **Wheel** - spin a wheel to pick from a list. Can be triggered by channel point redeems.
 <img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/397f7c07-2cc8-4548-8957-399afa047894" />
 
@@ -36,6 +39,9 @@ it was good, I went with it.
 * **Counters** - death counters, hug counters, any number chat can raise or lower with a command.
 <img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/0a2eb836-d0bb-4842-bde9-b9397baab91f" />
 
+* **Commands** - your own `!commands` and rotating auto messages. Each command can chain several actions: reply in chat, play a sound, show a popup on an overlay, drive another tool, or wait in between.
+<!-- SCREENSHOT NEEDED: Commands tab -->
+
 * **Song Request** - viewers request songs with channel points or `!sr`. Plays through YouTube Music via [Pear Desktop](https://github.com/pear-devs/pear-desktop).
 <img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/b492bd8c-744f-430e-8ea8-f7306abc25fa" />
 
@@ -46,6 +52,12 @@ it was good, I went with it.
 <img width="1402" height="932" alt="image" src="https://github.com/user-attachments/assets/e47d707f-1df1-4677-b680-18baa5479bbc" />
 
 Every tool has its own OBS browser source overlay. There is also a master overlay that can show several tools in one source, set up from the Settings tab, with drag and resize layout editing right in the browser.
+
+## Getting around
+
+Tools live in the sidebar down the left. Drag any of them up or down to put the ones you use most at the top, collapse the sidebar to icons when you want the extra width, or press **Ctrl+K** anywhere and type a few letters to jump straight to a tool.
+
+**Profiles** let you keep completely separate setups - one for gaming, one for co-working, whatever you like - and switch between them in Settings.
 
 ## Install
 
@@ -65,6 +77,8 @@ it set the Auth to None, then hit Connect on the Song Request tab.
 
 * Your data is saved at `%APPDATA%\com.spark.app\spark-data.json`.
 * Settings has backup and restore. Twitch login is **NOT** included in backups, you just reconnect.
+* Custom fonts you import are not included in backups either - only their names, so SPARK can tell you which ones to add again.
+* After an update that needs new Twitch permissions, SPARK will ask you to reconnect. A plain refresh will not do it, Twitch never adds new permissions to an existing login.
 * SPARK must be running for overlays to work.
 * Windows only. 
 

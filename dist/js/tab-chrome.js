@@ -1,33 +1,33 @@
-// ── Tab bar chrome ───────────────────────────────────────────────────────────
-// Two things that both live on the strip above #content, so they share a file:
+// ── Sidebar chrome ───────────────────────────────────────────────────────────
+// Everything about the navigation strip down the left of the window:
 //
-//   1. Overflow menu. The tab row is a fixed set of twelve non-wrapping items.
-//      When the window is narrowed past what they need, the ones on the right
-//      collapse into a "⋯" dropdown instead of spilling out of the window.
+//   1. Tab selection.
+//   2. Collapsing the sidebar to icons only.
+//   3. Drag to reorder, so the tools you actually use sit at the top.
+//   4. Ctrl+K to jump straight to a tab by typing.
+//   5. The disabled-tool banner.
 //
-//   2. Disabled-tool banner. Settings can switch a tool's chat commands and
-//      redeems off. Without a cue, that tab looks completely normal and the
-//      streamer is left wondering why nothing responds in chat.
+// This used to be a horizontal bar with an overflow menu. Fourteen tabs needed
+// roughly 1800px of row and never had it, so four always collapsed into a "⋯"
+// dropdown — and it was the last four in the DOM, not the four you use least.
+// Stacked vertically they all fit with room to spare, and the whole overflow
+// measure-and-hide pass is gone.
 //
 // The banner is ONE element shared by every tab rather than one per pane:
 // .tab-pane is itself a flex container with a split column layout, so a child
-// injected at the top of each would have to be fought into place twelve
-// separate times. A single strip outside #content sidesteps all of that.
+// injected at the top of each would have to be fought into place fourteen
+// separate times. A single strip above #content sidesteps all of that.
 
-import { TOOL_DEFS, toolToggles, toolEnabled, saveToolToggles } from './store.js';
+import { store, TOOL_DEFS, toolToggles, toolEnabled, saveToolToggles } from './store.js';
 
-// Tabs that must never collapse into the overflow menu. Settings is last in the
-// DOM, so it would otherwise be the very first thing to disappear — and it is
-// the one tab you need when something is misconfigured.
-const PINNED = new Set(['settings']);
+const { invoke } = window.__TAURI__.core;
 
 const TOOL_LABEL = {};
 TOOL_DEFS.forEach(t => { TOOL_LABEL[t.id] = t.label; });
 
-let bar, wrap, btn, btnLabel, menu, banner, bannerMsg, bannerBtn;
+let bar, collapseBtn, banner, bannerMsg, bannerBtn;
+let jump, jumpInput, jumpList;
 let tabs = [];
-let hidden = new Set();
-let reflowQueued = false;
 
 // ── Tab selection ────────────────────────────────────────────────────────────
 
@@ -41,8 +41,7 @@ export function selectTab(id){
   tab.classList.add('active');
   pane.classList.add('active');
 
-  closeMenu();
-  syncOverflowBtn();
+  closeJump();
   refreshDisabledBanner();
 }
 
@@ -52,117 +51,216 @@ function activeTabId(){
 }
 
 function tabLabel(tab){
-  return (tab.textContent || '').trim();
+  const el = tab.querySelector('.tab-label');
+  return (el ? el.textContent : tab.textContent || '').trim();
 }
 
-// ── Overflow ────────────────────────────────────────────────────────────────
+// ── Saved layout ─────────────────────────────────────────────────────────────
+// Order and collapsed state live in settings, which is written rarely — these
+// change when the user drags something, not on a timer.
 
-// Measure with every tab visible, then hide from the right until the row fits.
-// Widths are read fresh each pass rather than cached: theme and font changes
-// both move them, and reading twelve offsetWidths is cheap next to the risk of
-// laying out against stale numbers.
-function reflow(){
-  if(!bar || !tabs.length) return;
+function saveLayout(){
+  store.settings.tabOrder     = tabs.map(t => t.dataset.tab);
+  store.settings.sideCollapsed = document.body.classList.contains('side-collapsed');
+  invoke('save_app_settings', { data: store.settings }).catch(()=>{});
+}
 
-  // Reset to the natural row. No paint happens between here and the end of
-  // this function, so the brief overflow is never visible.
-  tabs.forEach(t => t.classList.remove('tab-overflowed'));
-  wrap.classList.remove('on');
-  btnLabel.textContent = '';
-  hidden = new Set();
+// Applies a saved order to the DOM. Anything saved that no longer exists is
+// skipped, and anything NEW that the saved order predates keeps its natural
+// place at the end — so adding a tab in a future release never disappears just
+// because someone reordered once.
+function applySavedOrder(){
+  const want = store.settings && store.settings.tabOrder;
+  if(!Array.isArray(want) || !want.length) return;
 
-  const avail = bar.clientWidth;
-  if(!avail) return; // window not laid out yet
+  const byId = new Map(tabs.map(t => [t.dataset.tab, t]));
+  const ordered = [];
+  want.forEach(id => { const t = byId.get(id); if(t){ ordered.push(t); byId.delete(id); } });
+  byId.forEach(t => ordered.push(t));   // tabs the saved order never knew about
 
-  const width = new Map();
-  tabs.forEach(t => width.set(t, t.offsetWidth));
+  ordered.forEach(t => bar.insertBefore(t, collapseBtn));
+  tabs = ordered;
+}
 
-  let running = 0;
-  width.forEach(v => { running += v; });
+// ── Collapse ─────────────────────────────────────────────────────────────────
 
-  if(running <= avail){
-    renderMenu();
-    syncOverflowBtn();
+function applyCollapsed(on){
+  document.body.classList.toggle('side-collapsed', !!on);
+  if(collapseBtn) collapseBtn.title = on ? 'Expand the sidebar' : 'Collapse the sidebar';
+  // With labels hidden the icon alone has to say what a tab is.
+  tabs.forEach(t => { t.title = on ? tabLabel(t) : ''; });
+}
+
+function toggleCollapsed(){
+  applyCollapsed(!document.body.classList.contains('side-collapsed'));
+  saveLayout();
+}
+
+// ── Drag to reorder ──────────────────────────────────────────────────────────
+// mousedown/mousemove rather than the HTML5 drag API, which is unreliable in
+// this WebView — the same reason every other drag handle in SPARK avoids it.
+//
+// A drag has to be distinguishable from a click, or reordering would break
+// simply selecting a tab. Nothing happens until the pointer has moved a few
+// pixels; below that it is still a click.
+
+const DRAG_THRESHOLD = 4;
+
+function initDrag(){
+  tabs.forEach(t => t.addEventListener('mousedown', e => startDrag(e, t)));
+}
+
+function startDrag(e, tab){
+  if(e.button !== 0) return;
+  const startY = e.clientY;
+  let dragging = false;
+  let lastTarget = null;
+
+  const clearMarks = () => {
+    tabs.forEach(x => x.classList.remove('drop-before','drop-after'));
+  };
+
+  const move = ev => {
+    if(!dragging){
+      if(Math.abs(ev.clientY - startY) < DRAG_THRESHOLD) return;
+      dragging = true;
+      tab.classList.add('dragging');
+      document.body.classList.add('tab-dragging');
+    }
+    ev.preventDefault();
+
+    // Which row is the pointer over, and which half of it.
+    const over = tabs.find(x => {
+      if(x === tab) return false;
+      const r = x.getBoundingClientRect();
+      return ev.clientY >= r.top && ev.clientY <= r.bottom;
+    });
+    clearMarks();
+    lastTarget = null;
+    if(!over) return;
+    const r = over.getBoundingClientRect();
+    const after = ev.clientY > r.top + r.height / 2;
+    over.classList.add(after ? 'drop-after' : 'drop-before');
+    lastTarget = { el: over, after };
+  };
+
+  const up = () => {
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+    document.body.classList.remove('tab-dragging');
+    tab.classList.remove('dragging');
+    clearMarks();
+
+    if(!dragging) return;      // it was a plain click; the click handler runs
+    if(!lastTarget) return;
+
+    if(lastTarget.after) lastTarget.el.after(tab);
+    else                 lastTarget.el.before(tab);
+
+    // Re-read from the DOM rather than splicing the array by hand: the DOM is
+    // what the user just rearranged, so it is the source of truth.
+    tabs = [...bar.querySelectorAll('.tab')];
+    saveLayout();
+  };
+
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+}
+
+// Offered in Settings, for when a drag has left things in a mess.
+export function resetTabOrder(){
+  delete store.settings.tabOrder;
+  invoke('save_app_settings', { data: store.settings }).catch(()=>{});
+  window.location.reload();
+}
+
+// ── Ctrl+K switcher ──────────────────────────────────────────────────────────
+
+let jumpMatches = [];
+let jumpSel = 0;
+
+// Subsequence match, so "sr" finds Song Request and "bc" finds Broadcast
+// without needing the letters adjacent.
+function fuzzy(needle, hay){
+  const n = needle.toLowerCase(), h = hay.toLowerCase();
+  if(!n) return true;
+  let i = 0;
+  for(const ch of h){ if(ch === n[i]) i++; if(i === n.length) return true; }
+  return false;
+}
+
+function renderJump(){
+  if(!jumpList) return;
+  const q = (jumpInput.value || '').trim();
+  jumpMatches = tabs.filter(t => fuzzy(q, tabLabel(t)));
+  if(jumpSel >= jumpMatches.length) jumpSel = 0;
+
+  if(!jumpMatches.length){
+    jumpList.innerHTML = '<div class="tj-empty">Nothing matches that.</div>';
     return;
   }
-
-  // Something has to go. The button now takes part in layout, so its own width
-  // counts against the budget from here on.
-  wrap.classList.add('on');
-
-  const flexible = tabs.filter(t => !PINNED.has(t.dataset.tab));
-
-  // Rightmost first, so the row keeps reading left to right.
-  for(let i = flexible.length - 1; i >= 0; i--){
-    if(running + wrap.offsetWidth <= avail) break;
-    const t = flexible[i];
-    t.classList.add('tab-overflowed');
-    hidden.add(t);
-    running -= width.get(t);
-  }
-
-  renderMenu();
-  syncOverflowBtn();
-
-  // Naming the active tab on the button makes it wider, which can push the row
-  // back over the edge. Give up one more tab at a time until it settles; the
-  // guard is only there so a pathological width can never spin forever.
-  let guard = 0;
-  while(guard++ < 16 && running + wrap.offsetWidth > avail){
-    const next = [...flexible].reverse().find(t => !hidden.has(t));
-    if(!next) break;
-    next.classList.add('tab-overflowed');
-    hidden.add(next);
-    running -= width.get(next);
-    renderMenu();
-    syncOverflowBtn();
-  }
-}
-
-function renderMenu(){
-  if(!menu) return;
-  menu.innerHTML = '';
-  // DOM order, not hide order, so the menu reads the same way the bar does.
-  tabs.filter(t => hidden.has(t)).forEach(t => {
-    const item = document.createElement('div');
-    item.className = 'tab-of-item' + (t.classList.contains('active') ? ' active' : '');
-    item.setAttribute('role', 'menuitem');
-    item.dataset.tab = t.dataset.tab;
+  jumpList.innerHTML = '';
+  jumpMatches.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'tj-item' + (i === jumpSel ? ' sel' : '');
     const svg = t.querySelector('svg');
-    if(svg) item.appendChild(svg.cloneNode(true));
-    item.appendChild(document.createTextNode(tabLabel(t)));
-    item.addEventListener('click', () => selectTab(t.dataset.tab));
-    menu.appendChild(item);
+    if(svg) row.appendChild(svg.cloneNode(true));
+    row.appendChild(document.createTextNode(tabLabel(t)));
+    row.addEventListener('mouseenter', () => { jumpSel = i; paintJumpSel(); });
+    row.addEventListener('click', () => selectTab(t.dataset.tab));
+    jumpList.appendChild(row);
   });
 }
 
-// When the selected tab is inside the menu it has no visible marker in the bar,
-// so the button borrows its name and its gold underline.
-function syncOverflowBtn(){
-  if(!btn) return;
-  const active = tabs.find(t => t.classList.contains('active'));
-  const buried = !!active && hidden.has(active);
-  btn.classList.toggle('active', buried);
-  btnLabel.textContent = buried ? tabLabel(active) : '';
-  btn.title = buried ? tabLabel(active) + ' — more tabs' : 'More tabs';
+// Only the highlight moves on arrow keys, so the list is not rebuilt per press.
+function paintJumpSel(){
+  if(!jumpList) return;
+  [...jumpList.children].forEach((el, i) => el.classList.toggle('sel', i === jumpSel));
+  const cur = jumpList.children[jumpSel];
+  if(cur && cur.scrollIntoView) cur.scrollIntoView({ block:'nearest' });
 }
 
-function openMenu(){
-  if(!menu || !hidden.size) return;
-  menu.classList.add('open');
-  btn.setAttribute('aria-expanded', 'true');
+function openJump(){
+  if(!jump) return;
+  jump.classList.add('open');
+  jumpInput.value = '';
+  jumpSel = 0;
+  renderJump();
+  jumpInput.focus();
 }
 
-function closeMenu(){
-  if(!menu) return;
-  menu.classList.remove('open');
-  btn?.setAttribute('aria-expanded', 'false');
+function closeJump(){
+  if(jump) jump.classList.remove('open');
 }
 
-function queueReflow(){
-  if(reflowQueued) return;
-  reflowQueued = true;
-  requestAnimationFrame(() => { reflowQueued = false; reflow(); });
+function initJump(){
+  if(!jump) return;
+
+  jumpInput.addEventListener('input', () => { jumpSel = 0; renderJump(); });
+
+  jumpInput.addEventListener('keydown', e => {
+    if(e.key === 'ArrowDown'){ e.preventDefault(); jumpSel = Math.min(jumpSel+1, jumpMatches.length-1); paintJumpSel(); }
+    else if(e.key === 'ArrowUp'){ e.preventDefault(); jumpSel = Math.max(jumpSel-1, 0); paintJumpSel(); }
+    else if(e.key === 'Enter'){
+      e.preventDefault();
+      const t = jumpMatches[jumpSel];
+      if(t) selectTab(t.dataset.tab);
+    }
+    else if(e.key === 'Escape'){ e.preventDefault(); closeJump(); }
+  });
+
+  // Clicking the backdrop closes; clicking the box does not.
+  jump.addEventListener('mousedown', e => { if(e.target === jump) closeJump(); });
+
+  document.addEventListener('keydown', e => {
+    if((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')){
+      e.preventDefault();
+      jump.classList.contains('open') ? closeJump() : openJump();
+      return;
+    }
+    // Escape closes it from anywhere, not only while the input has focus.
+    if(e.key === 'Escape' && jump.classList.contains('open')) closeJump();
+  });
 }
 
 // ── Disabled banner ─────────────────────────────────────────────────────────
@@ -171,8 +269,8 @@ export function refreshDisabledBanner(){
   if(!banner) return;
   const id = activeTabId();
 
-  // Only the eight command/redeem tools have a toggle. Chat, Credits, D.I.Y
-  // and Settings are always on and never show the strip.
+  // Only the command/redeem tools have a toggle. Chat, Credits, D.I.Y,
+  // Broadcast and Settings are always on and never show the strip.
   if(!id || !TOOL_LABEL[id] || toolEnabled(id)){
     banner.classList.remove('on');
     banner.dataset.tool = '';
@@ -201,41 +299,32 @@ function turnActiveToolOn(){
 // ── Init ────────────────────────────────────────────────────────────────────
 
 export function initTabChrome(){
-  bar       = document.getElementById('tabs');
-  wrap      = document.getElementById('tabOverflowWrap');
-  btn       = document.getElementById('tabOverflowBtn');
-  btnLabel  = document.getElementById('tabOverflowLabel');
-  menu      = document.getElementById('tabOverflowMenu');
-  banner    = document.getElementById('tabDisabledBanner');
-  bannerMsg = banner ? banner.querySelector('.msg') : null;
-  bannerBtn = document.getElementById('tabDisabledBannerOn');
+  bar         = document.getElementById('tabs');
+  collapseBtn = document.getElementById('sideCollapse');
+  banner      = document.getElementById('tabDisabledBanner');
+  bannerMsg   = banner ? banner.querySelector('.msg') : null;
+  bannerBtn   = document.getElementById('tabDisabledBannerOn');
+  jump        = document.getElementById('tabJump');
+  jumpInput   = document.getElementById('tabJumpInput');
+  jumpList    = document.getElementById('tabJumpList');
   if(!bar) return;
 
   tabs = [...bar.querySelectorAll('.tab')];
   tabs.forEach(t => t.addEventListener('click', () => selectTab(t.dataset.tab)));
 
   bannerBtn?.addEventListener('click', turnActiveToolOn);
+  collapseBtn?.addEventListener('click', toggleCollapsed);
 
-  btn?.addEventListener('click', e => {
-    e.stopPropagation();
-    menu.classList.contains('open') ? closeMenu() : openMenu();
-  });
-  document.addEventListener('click', e => {
-    if(!wrap?.contains(e.target)) closeMenu();
-  });
-  document.addEventListener('keydown', e => {
-    if(e.key === 'Escape') closeMenu();
-  });
-
-  // ResizeObserver rather than window.resize: it also catches the initial
-  // layout pass, which fires before any resize event ever would.
-  if(window.ResizeObserver) new ResizeObserver(queueReflow).observe(bar);
-  else window.addEventListener('resize', queueReflow);
-
-  // Segoe UI is normally there instantly, but if it swaps in late every tab
-  // width shifts, so measure again once the fonts have settled.
-  document.fonts?.ready?.then(queueReflow).catch(() => {});
-
-  queueReflow();
+  initDrag();
+  initJump();
   refreshDisabledBanner();
+}
+
+// Order and collapsed state come from settings, which is not loaded when
+// initTabChrome() runs (that happens before the data file is read, so the tab
+// row exists from the first paint). app.js calls this once the store is filled.
+export function applySavedTabLayout(){
+  if(!bar) return;
+  applySavedOrder();
+  applyCollapsed(store.settings && store.settings.sideCollapsed);
 }

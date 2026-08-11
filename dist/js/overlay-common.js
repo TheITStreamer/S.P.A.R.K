@@ -1,6 +1,21 @@
 // Shared overlay long-poll client.
 // Each overlay page imports this and registers handlers for event types.
 
+// Imported fonts. Every overlay that polls also gets the user's custom fonts,
+// so a font chosen in SPARK renders the same in OBS without each overlay page
+// having to know anything about it. The stylesheet is generated per request and
+// sent no-store; the font files it points at are content-hashed and cached
+// hard, which is what keeps OBS from serving a stale copy.
+(function attachFontCss(){
+  if(typeof document === 'undefined') return;
+  if(document.getElementById('spark-fonts-css')) return;
+  const l = document.createElement('link');
+  l.id  = 'spark-fonts-css';
+  l.rel = 'stylesheet';
+  l.href = '/fonts.css';
+  document.head.appendChild(l);
+})();
+
 const handlers = {};
 let since = 0;
 let toolFilter = null; // set before calling startPolling()

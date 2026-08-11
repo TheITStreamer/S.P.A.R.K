@@ -1,13 +1,15 @@
 {
   "name": "spark",
-  "version": "0.8.3",
+  "version": "0.9.0",
   "description": "S.P.A.R.K. - Streaming Panel for Alerts, Redeems and Key tools",
   "private": true,
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
     "prebuild": "node bump.js",
-    "build": "tauri build"
+    "build": "tauri build",
+    "build:minor": "node bump.js minor && tauri build",
+    "build:major": "node bump.js major && tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0"

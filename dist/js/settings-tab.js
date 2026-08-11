@@ -1,9 +1,10 @@
 import { store, ignoreList, saveIgnoreList, TOOL_DEFS, toolToggles, toolDefaultMsg, saveToolToggles, MASTER_TOOL_DEFS, masterTools } from './store.js';
-import { refreshDisabledBanner } from './tab-chrome.js';
+import { refreshDisabledBanner, resetTabOrder } from './tab-chrome.js';
 import { $, esc } from './utils.js';
 import { setHeaderStatus } from './app.js';
 import * as prof from './profiles.js';
 import { THEMES, applyTheme, currentTheme } from './theme.js';
+import * as fonts from './fonts.js';
 
 const { invoke } = window.__TAURI__.core;
 
@@ -56,7 +57,8 @@ export async function initSettings(){
   const el=$('settContent'); if(!el) return;
   el.innerHTML=`
   <h1 style="font-size:1rem;letter-spacing:.25em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:18px">⚙ Settings</h1>
-  <div class="card" style="max-width:520px">
+  <div class="settings-grid">
+  <div class="card">
     <h2>About</h2>
     <div style="display:flex;align-items:center;gap:10px">
       <span style="font-weight:700" id="settVersion">SPARK v…</span>
@@ -64,7 +66,7 @@ export async function initSettings(){
     </div>
     <div class="hint mt">This build is still in active development, not a 1.0 release. Expect rough edges, and please report anything odd.</div>
   </div>
-  <div class="card" style="max-width:520px">
+  <div class="card">
     <h2>Twitch Connection</h2>
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
       <span class="dot" id="settTwDot"></span><span id="settTwText">Not connected</span>
@@ -97,7 +99,7 @@ export async function initSettings(){
       <div class="hint mt">Chat is read automatically for <code>!</code> commands. Redeems (EventSub) start automatically on connect.</div>
     </div>
   </div>
-  <div class="card" style="max-width:520px;margin-top:0">
+  <div class="card">
     <h2>Bot Account <span class="tag">Optional</span></h2>
     <div class="hint" style="margin-bottom:12px">
       Connect a second Twitch account and everything SPARK says in chat comes from it instead of you —
@@ -123,7 +125,7 @@ export async function initSettings(){
     </div>
     <div class="warn mt" id="settBotWarn" style="display:none"></div>
   </div>
-  <div class="card" style="max-width:520px;margin-top:0">
+  <div class="card">
     <h2>Sounds</h2>
     <div class="row" style="align-items:center;gap:8px">
       <label style="margin:0">Play at most</label>
@@ -132,7 +134,7 @@ export async function initSettings(){
     </div>
     <div class="hint mt">Applies to every tool. Extra sounds beyond this are skipped rather than queued, so a spammed sound command can't pile up a backlog. Test buttons always play.</div>
   </div>
-  <div class="card" style="max-width:520px;margin-top:0">
+  <div class="card">
     <h2>Master Overlay</h2>
     <div class="hint" style="margin-bottom:8px">
       One browser source that shows several tools at once. Tick the tools you want on it.
@@ -154,13 +156,19 @@ export async function initSettings(){
       <span class="hint" style="margin:0">for the move and resize handles. Pick whatever is easiest to see against your scene.</span>
     </div>
   </div>
-  <div class="card" style="max-width:520px;margin-top:0">
+  <div class="card">
+    <h2>Sidebar</h2>
+    <div class="hint" style="margin-bottom:10px">Drag any tab up or down the sidebar to reorder it — put the tools you use most at the top. Press <strong>Ctrl+K</strong> anywhere to jump straight to a tab by typing.</div>
+    <button class="btn-sm btn-ghost" id="settResetTabs">Reset tab order</button>
+    <div class="hint" style="margin-top:6px">Resetting reloads the window.</div>
+  </div>
+  <div class="card">
     <h2>Theme</h2>
     <div class="hint" style="margin-bottom:10px">Changes the look of SPARK itself. Your overlays are not touched, so what goes out on stream stays exactly as you designed it.</div>
     <div id="settThemeList" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"></div>
     <div class="hint" style="margin-top:8px">The theme is saved with the profile you are on, so each setup can have its own look.</div>
   </div>
-  <div class="card" style="max-width:520px;margin-top:0">
+  <div class="card">
     <h2>Profiles</h2>
     <div class="hint" style="margin-bottom:12px">A profile is a complete SPARK setup: your lists, timers, goals, overlays and which tools are switched on. Keep one for quiet streams, one for co-working, one for everything, and swap between them. The profile you are on saves as you work, so there is no separate save step.</div>
     <div id="settProfileList"></div>
@@ -174,22 +182,37 @@ export async function initSettings(){
     <div class="hint" style="margin-top:6px">Shared by every profile: your Twitch connection, check-in counts, credits history and the ignore list below.</div>
     <div class="warn" id="settProfileMsg" style="display:none"></div>
   </div>
-  <div class="card" style="max-width:520px;margin-top:0">
+  <div class="card">
     <h2>Tool Availability</h2>
     <div class="hint" style="margin-bottom:12px">Turn a tool off when you're not using it and it will stop responding to chat commands and redeems. When off, viewers who try get the message you set below. Changes save straight away. Note: channel point redeems still spend the viewer's points, so turn the reward off in Twitch if you want to stop those.</div>
     <div id="settToolList"></div>
     <span class="ok" id="settToolsOk" style="display:none">Saved!</span>
   </div>
-  <div class="card" style="max-width:520px;margin-top:0">
+  <div class="card">
     <h2>Bot / User Ignore List</h2>
     <div class="hint" style="margin-bottom:8px">One username per line. These users are ignored everywhere: chat overlay, credits, and any future tools. Great for bots like Nightbot or StreamElements. The Chat tab's quick-Ignore button also adds to this list.</div>
     <textarea id="settIgnoreList" style="height:90px">${esc(ignoreList().join('\n'))}</textarea>
     <button class="btn-sm mt" id="settIgnoreSave">Save Ignore List</button>
     <span class="ok" id="settIgnoreOk" style="display:none;margin-left:8px">Saved!</span>
   </div>
-  <div class="card" style="max-width:520px;margin-top:0">
+  <div class="card">
+    <h2>Custom Fonts</h2>
+    <div class="hint" style="margin-bottom:10px">Add your own font files and they appear in every font dropdown in SPARK, and on your overlays in OBS. Accepts .ttf, .otf, .woff and .woff2.</div>
+    <div id="settFontList"></div>
+    <div class="row mt" style="align-items:flex-end;gap:8px">
+      <div style="flex:1">
+        <label>Name it</label>
+        <input type="text" id="settFontName" placeholder="e.g. My Stream Font">
+      </div>
+      <button class="btn-sm btn-gold" id="settFontAdd">Choose file…</button>
+    </div>
+    <div class="hint" style="margin-top:6px">The name is yours to pick — it's what shows up in the dropdowns.</div>
+    <div class="warn" id="settFontMsg" style="display:none"></div>
+    <div class="ok" id="settFontOk" style="display:none"></div>
+  </div>
+  <div class="card">
     <h2>Backup &amp; Restore</h2>
-    <div class="hint" style="margin-bottom:12px">Export a backup of all your lists, goals, check-in counts, and settings. Twitch tokens are excluded. You'll reconnect on a new PC in about 30 seconds.</div>
+    <div class="hint" style="margin-bottom:12px">Export a backup of all your lists, goals, check-in counts, and settings. Twitch tokens are excluded. Font files are not included, but their names are — after restoring you'll be told which ones to add again. You'll reconnect on a new PC in about 30 seconds.</div>
     <div class="row">
       <button class="btn-sm btn-gold" id="settExportBtn">Export Backup</button>
       <button class="btn-sm" id="settImportBtn">Import Backup</button>
@@ -197,13 +220,22 @@ export async function initSettings(){
     <div class="warn" id="settBackupMsg" style="display:none"></div>
     <div class="ok" id="settBackupOk" style="display:none"></div>
   </div>
+  </div>
   <div class="hint" style="margin-top:8px;text-align:center">Data saved to %APPDATA%\\com.spark.app\\spark-data.json</div>`;
 
   wireSettingsEvents();
   wireProfileEvents();
+  wireFontEvents();
+  {
+    const rt = $('settResetTabs');
+    if(rt) rt.addEventListener('click', ()=>{
+      if(confirm('Put the sidebar back to its original order?\n\nSPARK will reload.')) resetTabOrder();
+    });
+  }
   renderThemes();
   renderToolToggles();
   renderMasterCard();
+  renderFonts();
   // Existing installs have no profiles; give them one pointing at the data
   // already on disk so this feature can never look like it wiped a setup.
   prof.ensureBootstrapped().then(renderProfiles).catch(()=>renderProfiles());
@@ -239,14 +271,7 @@ export async function initSettings(){
 
 function wireSettingsEvents(){
   $('settTwAuthBtn').addEventListener('click',startAuth);
-  $('settTwLogout').addEventListener('click',()=>{
-    invoke('twitch_logout'); // stops sockets AND clears saved tokens
-    store.twitch.connected=false;
-    store.twitch_tokens={};
-    $('settTwConnectedBox').style.display='none';
-    $('settTwAuthBox').style.display='block';
-    setTwStatus('','Not connected');
-  });
+  $('settTwLogout').addEventListener('click',doLogout);
   $('settReconnectChat').addEventListener('click',async()=>{
     try{ await invoke('twitch_connect_chat',{channel:store.twitch.login}); setTwStatus('on','Chat reconnected'); }
     catch(e){ setTwStatus('err',String(e)); }
@@ -259,6 +284,9 @@ function wireSettingsEvents(){
     $('settBotConnectedBox').style.display='none';
     $('settBotAuthBox').style.display='block';
     $('settBotWarn').style.display='none';
+    // With no bot there is nothing to choose between, so the Broadcast tab's
+    // "send as" picker has to disappear again.
+    window.dispatchEvent(new CustomEvent('spark-bot-status',{detail:{connected:false}}));
   });
   // The sender thread reports a rejected bot message here rather than failing
   // silently — without this the streamer only finds out when chat goes quiet.
@@ -555,8 +583,92 @@ function syncToolRowPill(id){
   if(pill) pill.style.display = (cb && cb.checked) ? 'none' : '';
 }
 
+// ── Custom fonts ──────────────────────────────────────────────────────────────
+
+function showFontMsg(msg){ const e=$('settFontMsg'); if(e){ e.textContent=msg; e.style.display='block'; } const o=$('settFontOk'); if(o) o.style.display='none'; }
+function showFontOk(msg){ const e=$('settFontOk'); if(e){ e.textContent=msg; e.style.display='block'; } const w=$('settFontMsg'); if(w) w.style.display='none'; }
+
+async function renderFonts(){
+  const host=$('settFontList'); if(!host) return;
+  const list=fonts.customFonts();
+  if(!list.length){
+    host.innerHTML='<div class="hint">No custom fonts yet.</div>';
+    return;
+  }
+  // A font whose file is gone still shows, greyed, with a "missing" tag —
+  // silently dropping it would leave overlays using a family name that no
+  // longer resolves with nothing on screen to explain why.
+  let missing=[];
+  try{ missing=await fonts.missingFonts(); }catch(e){}
+
+  // Backups carry font NAMES but not the files, so this is the normal state
+  // after restoring onto a different PC. Say so rather than leaving the user
+  // to work out why their overlay went back to a default font.
+  const banner = missing.length
+    ? `<div class="warn" style="margin-bottom:10px">${missing.length === 1 ? 'One font is' : missing.length + ' fonts are'} listed here but the file is not on this PC — most likely this setup came from a backup. Import the file again under the same name and everything that used it goes back to normal.</div>`
+    : '';
+
+  host.innerHTML=banner+list.map(f=>{
+    const gone=missing.includes(f.family);
+    const preview=gone
+      ? '<span class="hint">file missing — import it again</span>'
+      : `<span style="font-family:'${esc(f.family)}';font-size:1.05rem">Aa Bb Cc 123</span>`;
+    return `<div class="row" style="align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--row-line)">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600${gone?';opacity:.5':''}">${esc(f.family)}</div>
+        <div style="margin-top:2px">${preview}</div>
+      </div>
+      <button class="btn-sm btn-ghost" data-font-del="${esc(f.family)}">Remove</button>
+    </div>`;
+  }).join('');
+
+  host.querySelectorAll('[data-font-del]').forEach(b=>{
+    b.addEventListener('click',async()=>{
+      const fam=b.getAttribute('data-font-del');
+      try{ await fonts.removeFont(fam); showFontOk(`Removed ${fam}.`); }
+      catch(e){ showFontMsg(String(e)); }
+      renderFonts();
+    });
+  });
+}
+
+function wireFontEvents(){
+  const btn=$('settFontAdd'); if(!btn) return;
+  btn.addEventListener('click',async()=>{
+    const name=($('settFontName').value||'').trim();
+    if(!name){ showFontMsg('Give the font a name first — that name is what you pick in the dropdowns.'); return; }
+    try{
+      const path=await window.__TAURI__.dialog.open({ multiple:false,
+        filters:[{ name:'Fonts', extensions:['ttf','otf','woff','woff2'] }] });
+      if(!path) return;
+      await fonts.importFont(path, name);
+      $('settFontName').value='';
+      showFontOk(`Added ${name}. It's in every font dropdown now — refresh your OBS browser sources to pick it up.`);
+      renderFonts();
+    }catch(e){ showFontMsg(String(e)); }
+  });
+}
+
 function showBackupMsg(msg){ const e=$('settBackupMsg'); if(e){ e.textContent=msg; e.style.display='block'; } const o=$('settBackupOk'); if(o) o.style.display='none'; }
 function showBackupOk(msg){ const e=$('settBackupOk'); if(e){ e.textContent=msg; e.style.display='block'; } const w=$('settBackupMsg'); if(w) w.style.display='none'; }
+
+function doLogout(){
+  invoke('twitch_logout'); // stops sockets AND clears saved tokens
+  store.twitch.connected=false;
+  store.twitch_tokens={};
+  $('settTwConnectedBox').style.display='none';
+  $('settTwAuthBox').style.display='block';
+  setTwStatus('','Not connected');
+}
+
+// Called by the re-auth popup's "Reconnect now" button. A refresh grant never
+// widens scopes, so the ONLY way to pick up a new permission is a full logout
+// followed by a fresh device-code auth — doing them together here means the
+// user never has to find the two buttons themselves.
+export function beginReauth(){
+  doLogout();
+  startAuth();
+}
 
 async function startAuth(){
   const clientId=$('settTwClientId').value.trim();
@@ -636,6 +748,9 @@ export async function refreshBotStatus(){
     }
     const w=$('settBotWarn');
     if(s.error){ w.textContent='⚠ '+s.error; w.style.display='block'; }
+    // The Broadcast tab's "send as" picker only exists when a bot does, so it
+    // has to know the moment one is connected or removed.
+    window.dispatchEvent(new CustomEvent('spark-bot-status',{detail:{connected:!!s.connected, login:s.login||''}}));
   }catch(e){ /* not connected yet — leave the card in its default state */ }
 }
 

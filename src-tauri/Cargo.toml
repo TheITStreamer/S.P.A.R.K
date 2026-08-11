@@ -1,6 +1,6 @@
 [package]
 name = "spark"
-version = "0.8.3"
+version = "0.9.0"
 description = "S.P.A.R.K. - Streaming Panel for Alerts, Redeems and Key tools"
 authors = ["SPARK"]
 edition = "2021"

@@ -1,5 +1,6 @@
 import { store, toolBlocked, toolEnabled } from './store.js';
 import { $, esc, renderOverlayBar } from './utils.js';
+import { fontOptionsHtml } from './fonts.js';
 
 const { invoke } = window.__TAURI__.core;
 
@@ -13,7 +14,7 @@ const THEMES = {
   'Mono':       { bgColor:'#111111', borderColor:'#ffffff', textColor:'#ffffff', valueColor:'#ffffff' },
   'Custom':     null,
 };
-const GOOGLE_FONTS = ['Segoe UI','Roboto','Poppins','Montserrat','Oswald','Bebas Neue','Orbitron','Rajdhani','Press Start 2P','Quicksand','Fredoka','Baloo 2','Comic Neue','Playfair Display'];
+// Font list now shared app-wide — see fonts.js.
 const SHAPES = [{v:'rounded',l:'Rounded'},{v:'pill',l:'Pill'},{v:'square',l:'Square'},{v:'circle',l:'Circle'},{v:'none',l:'None (text only)'}];
 const ANIMS  = [{v:'pop',l:'Pop'},{v:'bounce',l:'Bounce'},{v:'shake',l:'Shake'},{v:'flash',l:'Flash'},{v:'none',l:'None'}];
 const PERMS  = [
@@ -224,7 +225,7 @@ function openEditor(c){
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;display:flex;align-items:center;justify-content:center';
   const s = c.style;
   const themeOpts = Object.keys(THEMES).map(t=>`<option value="${t}" ${c.theme===t?'selected':''}>${t}</option>`).join('');
-  const fontOpts = GOOGLE_FONTS.map(f=>`<option value="${f}" ${s.font===f?'selected':''}>${f}</option>`).join('');
+  const fontOpts = fontOptionsHtml(s.font);
   const shapeOpts = SHAPES.map(o=>`<option value="${o.v}" ${s.shape===o.v?'selected':''}>${o.l}</option>`).join('');
   const animOpts = ANIMS.map(o=>`<option value="${o.v}" ${s.animOnChange===o.v?'selected':''}>${o.l}</option>`).join('');
   const permOpts = PERMS.map(o=>`<option value="${o.v}" ${c.permission===o.v?'selected':''}>${o.l}</option>`).join('');

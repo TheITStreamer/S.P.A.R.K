@@ -1,6 +1,7 @@
 import { store, toolBlocked, toolEnabled } from './store.js';
 import { $, esc, fmtTime, renderOverlayBar } from './utils.js';
 import { playSound as playAudioFile } from './audio.js';
+import { fontOptionsHtml, isCustomFont } from './fonts.js';
 
 const { invoke } = window.__TAURI__.core;
 const dialog = window.__TAURI__.dialog;
@@ -238,8 +239,8 @@ function buildLeft(){
     <div class="hint">Format: mm:ss &nbsp;|&nbsp; h:mm:ss &nbsp;|&nbsp; d:h:mm:ss</div>
     <label class="mt">Mode</label>
     <select id="tmMode"><option value="down">Count down</option><option value="up">Count up (stopwatch)</option></select>
-    <label class="mt">Google Font</label>
-    <input type="text" id="tmFont" placeholder="Roboto Mono" value="Roboto Mono">
+    <label class="mt">Font</label>
+    <select id="tmFont">${fontOptionsHtml('Roboto Mono')}</select>
     <label class="mt">Text colour</label>
     <input type="color" id="tmColor" value="#ffc83d" style="width:60px;height:32px;border:none;background:none;cursor:pointer">
     <label class="mt">Start sound (optional)</label>
@@ -562,7 +563,7 @@ function openConfigEditor(cfg){
       +'</div>'
       +'<div style="margin-bottom:10px"><label>Label template</label><input id="atEdTemplate" type="text" value="'+esc(cfg.nameTemplate||'{text}')+'"><div style="font-size:.72rem;color:var(--muted);margin-top:3px">{text} what the viewer typed | {n} timer number | {title} this config title</div></div>'
       +'<div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin-bottom:10px">'
-        +'<div><label>Google Font</label><input id="atEdFont" type="text" value="'+esc(cfg.font||'Roboto Mono')+'"></div>'
+        +'<div><label>Font</label><select id="atEdFont">'+fontOptionsHtml(cfg.font||'Roboto Mono')+'</select></div>'
         +'<div><label>Text colour</label><input id="atEdColor" type="color" value="'+(cfg.color||'#ffc83d')+'" style="width:50px;height:32px;border:none;background:none;cursor:pointer"></div>'
         +'<div><label>Tag colour</label><input id="atEdTag" type="color" value="'+(cfg.tagColor||'#ffc83d')+'" style="width:50px;height:32px;border:none;background:none;cursor:pointer"></div>'
       +'</div>'
@@ -906,8 +907,12 @@ function renderRightPreview(){
   });
 }
 
+// fonts.js loads every built-in family once at boot and custom families come
+// from /fonts.css, so this only has to cover a family that predates both —
+// something typed into the free-text box this picker replaced.
 function loadGoogleFont(font){
   if(!font) return;
+  if(isCustomFont(font)) return; // an imported file, not a Google family
   const id='gfont-'+font.replace(/\s/g,'-');
   if(document.getElementById(id)) return;
   const link=document.createElement('link');

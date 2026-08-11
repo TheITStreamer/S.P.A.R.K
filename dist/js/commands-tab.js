@@ -17,6 +17,7 @@
 import { store, toolBlocked, liveSet, noteChatter } from './store.js';
 import { $, esc, flash, initDrag } from './utils.js';
 import { playSound as playAudioFile } from './audio.js';
+import { fontOptionsHtml } from './fonts.js';
 
 const { invoke } = window.__TAURI__.core;
 const dialog = window.__TAURI__.dialog;
@@ -82,7 +83,7 @@ const POPUP_POSITIONS = [
 const POPUP_ANIMS = [
   {v:'pop',l:'Pop'}, {v:'fade',l:'Fade'}, {v:'slide',l:'Slide up'}, {v:'none',l:'None'},
 ];
-const POPUP_FONTS = ['Segoe UI','Roboto','Poppins','Montserrat','Oswald','Bebas Neue','Orbitron','Rajdhani','Press Start 2P','Quicksand','Fredoka','Baloo 2','Comic Neue','Playfair Display'];
+// Font list now shared app-wide — see fonts.js.
 
 // Grouped, and every entry shows what it turns into.
 //   k  = the variable
@@ -574,6 +575,17 @@ async function ensureStreamInfo(){
   catch(e){ streamInfo = null; }
   return streamInfo;
 }
+
+// Going live or ending is now an event rather than something we notice on the
+// next poll, so the "only while live" gate flips immediately instead of being
+// up to 30 seconds stale. Still re-fetched afterwards: the event carries no
+// title or category, and those feed the {game}/{title} variables.
+window.addEventListener('spark-stream', e => {
+  const live = !!(e.detail && e.detail.live);
+  if(streamInfo) streamInfo.live = live;
+  else streamInfo = { live };
+  ensureStreamInfo().catch(()=>{});
+});
 
 function fmtUptime(startedAt){
   if(!startedAt) return 'not live';
@@ -1646,7 +1658,7 @@ function actionHtml(a, i){
     const posOpts  = POPUP_POSITIONS.map(p => `<option value="${p.v}" ${a.position===p.v?'selected':''}>${p.l}</option>`).join('');
     const animOpts = POPUP_ANIMS.map(p => `<option value="${p.v}" ${a.anim===p.v?'selected':''}>${p.l}</option>`).join('');
     const effOpts  = TEXT_EFFECTS.map(p => `<option value="${p.v}" ${(a.textEffect||'none')===p.v?'selected':''}>${p.l}</option>`).join('');
-    const fontOpts = POPUP_FONTS.map(f => `<option value="${f}" ${a.font===f?'selected':''}>${f}</option>`).join('');
+    const fontOpts = fontOptionsHtml(a.font);
     const imgName  = a.image ? a.image.split(/[\\/]/).pop() : 'No file chosen';
     const mode     = a.imageMode || (a.image ? 'file' : 'none');
     const unitSel  = (act, val) => `<select data-act="${act}" data-i="${i}" style="width:60px">

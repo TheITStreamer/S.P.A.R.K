@@ -1,11 +1,12 @@
 import { store, isIgnored, addIgnore, cachedFollower, setCachedFollower } from './store.js';
 import { $, esc, renderOverlayBar } from './utils.js';
 import {
-  defaultCfg, deepMerge, applyPreset, PRESETS, GOOGLE_FONTS,
+  defaultCfg, deepMerge, applyPreset, PRESETS,
   ROLE_KEYS, ROLE_LABELS, SHAPES, SHAPE_LABELS, ANIMS, ANIM_LABELS, DIRS,
   BACKGROUNDS, BACKGROUND_LABELS,
 } from './chat-defaults.js';
 import { playSound as playAudioFile } from './audio.js';
+import { fontChoices } from './fonts.js';
 
 const { invoke } = window.__TAURI__.core;
 const dialog = window.__TAURI__.dialog;
@@ -19,7 +20,9 @@ let activeRole = 'everyone';
 let liveLog = []; // {username, display, message, ignored}
 let saveTimer = null;
 
-// Persistent cache (store.settings.followerCache) — survives restarts.
+// Reads the in-memory mirror of Rust's follower cache (store.js), falling back
+// to an API check on a miss. fromApi tells the mirror not to echo the result
+// back to Rust — the check itself already cached it there.
 async function checkFollower(userId){
   if(!userId) return false;
   const c = cachedFollower(userId);
@@ -27,7 +30,7 @@ async function checkFollower(userId){
   if(!store.twitch.userId) return false;
   try{
     const r = await invoke('twitch_check_follower', { userId, broadcasterId: store.twitch.userId });
-    setCachedFollower(userId, !!r);
+    setCachedFollower(userId, !!r, { fromApi:true });
     return !!r;
   }catch(e){ return false; }
 }
@@ -239,7 +242,7 @@ function roleSectionHtml(){
     ${field('Border colour', colorInput('rfBorderColor', r.borderColor))}
     ${field('Border width (px)', numInput('rfBorderWidth', r.borderWidth, 0, 8, 1))}
     ${field('Shape', selectInput('rfShape', SHAPES.map(s=>({v:s,l:SHAPE_LABELS[s]})), r.shape))}
-    ${field('Font', selectInput('rfFont', GOOGLE_FONTS.map(f=>({v:f,l:f})), r.font))}
+    ${field('Font', selectInput('rfFont', fontChoices(), r.font))}
     ${field('Font size (px)', numInput('rfFontSize', r.fontSize, 10, 32, 1))}
     ${field('Font weight', selectInput('rfFontWeight', FONT_WEIGHTS, r.fontWeight))}
     <div style="align-self:end">${checkInput('rfItalic', r.italic, 'Italic')}</div>
@@ -330,7 +333,7 @@ function alertCardHtml(kind, prefix){
       ${field('Shape', selectInput(prefix+'Shape', SHAPES.filter(s=>s!=='none').map(s=>({v:s,l:SHAPE_LABELS[s]})), a.shape))}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:10px">
-      ${field('Font', selectInput(prefix+'Font', GOOGLE_FONTS.map(f=>({v:f,l:f})), a.font))}
+      ${field('Font', selectInput(prefix+'Font', fontChoices(), a.font))}
       ${field('Font size', numInput(prefix+'Fs', a.fontSize, 10, 32, 1))}
       ${field('Font weight', selectInput(prefix+'Fw', FONT_WEIGHTS, a.fontWeight))}
       ${field('Duration (sec)', numInput(prefix+'Dur', a.duration, 1, 60, 1))}

@@ -118,7 +118,14 @@ fn handle(app: &tauri::AppHandle, request: tiny_http::Request) {
         "/js/chat-defaults.js"    => { js(request, CHAT_DEFAULTS);    return; }
         "/js/credits-defaults.js" => { js(request, CREDITS_DEFAULTS); return; }
         "/js/diy-runtime.js"      => { js(request, DIY_RUNTIME);      return; }
+        "/fonts.css"              => { serve_fonts_css(app, request);  return; }
         _ => {}
+    }
+
+    // Imported font files: /fonts/<file>
+    if let Some(file) = path.strip_prefix("/fonts/") {
+        serve_font_file(app, request, file);
+        return;
     }
 
     if path == "/events" {
@@ -277,7 +284,7 @@ fn serve_diy(app: &tauri::AppHandle, request: tiny_http::Request, url: &str) {
     };
 
     let shared = app.state::<Shared>();
-    let (widget, ignore_json) = {
+    let (widget, ignore_json, imported_families) = {
         let d = shared.data.lock().unwrap();
         let w = d.diy.get("widgets").and_then(|w| w.as_array()).and_then(|arr| {
             arr.iter().find(|w| w.get("id").and_then(|x| x.as_str()) == Some(id.as_str())).cloned()
@@ -288,11 +295,18 @@ fn serve_diy(app: &tauri::AppHandle, request: tiny_http::Request, url: &str) {
                 .filter_map(|u| u.as_str()).map(|u| serde_json::json!(u.to_ascii_lowercase())).collect();
             serde_json::Value::Array(v)
         }).unwrap_or_else(|| serde_json::json!([]));
-        (w, ig.to_string())
+        // Families the user imported — /fonts.css already serves these, so the
+        // page must NOT also ask Google for them.
+        let fams: Vec<String> = d.settings.get("fonts").and_then(|f| f.as_array())
+            .map(|arr| arr.iter()
+                .filter_map(|f| f.get("family").and_then(|x| x.as_str()).map(|s| s.to_string()))
+                .collect())
+            .unwrap_or_default();
+        (w, ig.to_string(), fams)
     };
 
     match widget {
-        Some(w) => { let page = build_diy_page(&w, &ignore_json); html(request, &page); }
+        Some(w) => { let page = build_diy_page(&w, &ignore_json, &imported_families); html(request, &page); }
         None => {
             let _ = request.respond(Response::from_string("D.I.Y widget not found").with_status_code(404));
         }
@@ -305,7 +319,7 @@ fn serve_diy(app: &tauri::AppHandle, request: tiny_http::Request, url: &str) {
 // loss-free.
 fn script_safe(s: String) -> String { s.replace("</", "<\\/") }
 
-fn build_diy_page(w: &serde_json::Value, ignore_json: &str) -> String {
+fn build_diy_page(w: &serde_json::Value, ignore_json: &str, imported_families: &[String]) -> String {
     let id   = w.get("id").and_then(|x| x.as_str()).unwrap_or("");
     let typ  = w.get("type").and_then(|x| x.as_str()).unwrap_or("chat");
     let css  = w.get("css").and_then(|x| x.as_str()).unwrap_or("");
@@ -370,12 +384,25 @@ fn build_diy_page(w: &serde_json::Value, ignore_json: &str) -> String {
     // Google Font (or a plain system stack).
     // 'system-ui' style stack + emoji fonts so plain unicode emoji always render.
     let emoji = "'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji'";
+    // DIY builds its page in Rust rather than importing overlay-common.js, so
+    // the imported-font stylesheet has to be attached here too. Always linked:
+    // the streamer's own CSS can name a custom family even when the widget's
+    // font dropdown is left on the default.
+    let custom_css = "<link href=\"/fonts.css\" rel=\"stylesheet\">";
+
+    // An imported font is served by /fonts.css — asking Google for it would
+    // just 404. Only families we did NOT import get a Google stylesheet.
+    let imported = imported_families.iter().any(|f| f.as_str() == font);
+
     let (font_link, font_css) = if font.is_empty() || font == "System default" {
-        (String::new(), format!("body{{font-family:system-ui,'Segoe UI',Roboto,{},sans-serif}}", emoji))
+        (custom_css.to_string(), format!("body{{font-family:system-ui,'Segoe UI',Roboto,{},sans-serif}}", emoji))
     } else {
-        (
+        let google = if imported { String::new() } else {
             format!("<link href=\"https://fonts.googleapis.com/css2?family={}&display=swap\" rel=\"stylesheet\">",
-                    font.replace(' ', "+")),
+                    font.replace(' ', "+"))
+        };
+        (
+            format!("{}{}", custom_css, google),
             format!("body{{font-family:'{}',system-ui,{},sans-serif}}", font, emoji),
         )
     };
@@ -522,6 +549,79 @@ fn serve_command_image(app: &tauri::AppHandle, request: tiny_http::Request, url:
 }
 
 // Serve a widget's chosen sound file straight from disk (any size, no embedding).
+// ── Imported fonts ────────────────────────────────────────────────────────────
+// Two routes work together:
+//   /fonts.css   — one @font-face block per imported font, regenerated on every
+//                  request and marked no-store, so an overlay picks up a newly
+//                  imported font on refresh.
+//   /fonts/<file>— the font file itself. The filename contains a hash of the
+//                  contents (see import_font), so it is immutable and can be
+//                  cached hard. That is what stops OBS serving a stale font.
+// Overlays just <link> /fonts.css and then use the family name normally.
+
+fn serve_fonts_css(app: &tauri::AppHandle, request: tiny_http::Request) {
+    let shared = app.state::<Shared>();
+    let fonts = {
+        let d = shared.data.lock().unwrap();
+        d.settings.get("fonts").and_then(|f| f.as_array()).cloned().unwrap_or_default()
+    };
+
+    let mut css = String::from("/* SPARK imported fonts */\n");
+    for f in fonts {
+        let family = f.get("family").and_then(|x| x.as_str()).unwrap_or("");
+        let file   = f.get("file").and_then(|x| x.as_str()).unwrap_or("");
+        if family.is_empty() || file.is_empty() { continue; }
+        let file = crate::safe_font_file(file);
+        // A family name with a quote in it would break out of the CSS string.
+        let family = family.replace('\'', "").replace('"', "").replace('\\', "");
+        let fmt = match file.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+            "ttf"   => "truetype",
+            "otf"   => "opentype",
+            "woff"  => "woff",
+            "woff2" => "woff2",
+            _       => continue,
+        };
+        css.push_str(&format!(
+            "@font-face{{font-family:'{}';src:url('/fonts/{}') format('{}');font-display:swap}}\n",
+            family, file, fmt));
+    }
+
+    let mut r = Response::from_string(css);
+    r.add_header(Header::from_bytes(&b"Content-Type"[..], &b"text/css; charset=utf-8"[..]).unwrap());
+    r.add_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+    // The list changes whenever a font is imported or removed, and it is tiny.
+    r.add_header(Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).unwrap());
+    let _ = request.respond(r);
+}
+
+fn serve_font_file(app: &tauri::AppHandle, request: tiny_http::Request, file: &str) {
+    let file = crate::safe_font_file(file.split('?').next().unwrap_or(""));
+    if file.is_empty() {
+        let _ = request.respond(Response::from_string("").with_status_code(404));
+        return;
+    }
+    let path = crate::fonts_dir(app).join(&file);
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            let ct = match file.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+                "ttf"   => "font/ttf",
+                "otf"   => "font/otf",
+                "woff"  => "font/woff",
+                "woff2" => "font/woff2",
+                _       => "application/octet-stream",
+            };
+            let mut r = Response::from_data(bytes);
+            r.add_header(Header::from_bytes(&b"Content-Type"[..], ct.as_bytes()).unwrap());
+            // OBS's browser source is a plain Chromium; a font loaded from a
+            // stylesheet still needs CORS to be allowed explicitly.
+            r.add_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
+            r.add_header(Header::from_bytes(&b"Cache-Control"[..], &b"public, max-age=31536000, immutable"[..]).unwrap());
+            let _ = request.respond(r);
+        }
+        Err(_) => { let _ = request.respond(Response::from_string("font not found").with_status_code(404)); }
+    }
+}
+
 fn serve_diy_sound(app: &tauri::AppHandle, request: tiny_http::Request, url: &str) {
     let qs = url.split('?').nth(1).unwrap_or("");
     let id = qs.split('&').find(|s| s.starts_with("id=")).map(|s| s[3..].to_string());

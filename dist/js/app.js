@@ -10,17 +10,22 @@ import { initCounters }   from './counters-tab.js';
 import { initCredits }    from './credits-tab.js';
 import { initDiy }        from './diy-tab.js';
 import { initCommands }   from './commands-tab.js';
+import { initBroadcast }  from './broadcast-tab.js';
 import { initSettings }   from './settings-tab.js';
-import { store }          from './store.js';
+import { initReauth }     from './reauth.js';
+import { initFonts }      from './fonts.js';
+import { store, loadFollowerMirror } from './store.js';
 import { applyTheme }     from './theme.js';
-import { initTabChrome, refreshDisabledBanner } from './tab-chrome.js';
+import { initTabChrome, refreshDisabledBanner, applySavedTabLayout } from './tab-chrome.js';
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-// ── Tabs ──────────────────────────────────────────────────────────────────────
-// Selection, the narrow-window overflow menu and the disabled-tool banner all
-// live in tab-chrome.js — they all have to agree about which tab is showing.
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+// Tab selection, collapsing, drag-to-reorder, the Ctrl+K switcher and the
+// disabled-tool banner all live in tab-chrome.js — they all have to agree about
+// which tab is showing. Runs before the data file is read so the nav exists on
+// the first paint; applySavedTabLayout() below fills in the saved order.
 initTabChrome();
 
 // ── Global Twitch status header ───────────────────────────────────────────────
@@ -385,6 +390,55 @@ const HELP_CONTENT = {
       + '<h3>Testing and OBS</h3>'
       + '<p>Use the <strong>Test</strong> buttons to fire a message or alert on the preview and on your live overlay. When you like it, copy the widget <strong>URL</strong> and add it as a Browser Source in OBS.</p>'
   },
+  broadcast: {
+    title: 'Broadcast',
+    html: '<h3>Overview</h3>'
+      + '<p>The things you would otherwise open twitch.tv for while you are live: your title and category, chat with moderation, and quick actions.</p>'
+      + '<h3>Stream Info</h3>'
+      + '<ul>'
+      + '<li>Edit your <strong>title</strong>, <strong>category</strong> and <strong>tags</strong>, then click <strong>Apply to Twitch</strong>. Nothing is sent until you do.</li>'
+      + '<li>The category box searches Twitch as you type — pick from the results rather than typing the name exactly.</li>'
+      + '<li>Tags cannot contain spaces, so any you type are removed. Twitch allows 10 tags of 25 characters each.</li>'
+      + '<li>A dot on the Apply button means you have unsaved changes. <strong>Revert</strong> puts everything back to what Twitch currently has.</li>'
+      + '</ul>'
+      + '<h3>Presets</h3>'
+      + '<p>A preset stores the title, category and tags <em>together</em>. Set the three fields how you want them, name it and click <strong>Save current</strong>. Loading it later fills all three in at once — handy when you switch games mid-stream.</p>'
+      + '<p>Loading a preset does not send anything to Twitch. You still press <strong>Apply</strong>, so you get a chance to tweak the title first.</p>'
+      + '<p>Saving under a name you have already used replaces that preset instead of adding a second one.</p>'
+      + '<h3>Stream Marker</h3>'
+      + '<p>Drops a bookmark at the current moment so you can jump straight to it when editing the VOD later. Only works while you are live.</p>'
+      + '<h3>Status</h3>'
+      + '<p>Shows whether you are live, how long for, your viewer count, and when your next ad break is due. The ad readout is information only — every ad trigger lives in the <strong>Commands</strong> tab.</p>'
+      + '<h3>Chat</h3>'
+      + '<ul>'
+      + '<li>Hover a message for <strong>Delete</strong>, a 10-minute timeout, <strong>Ban</strong> and <strong>Pin</strong>.</li>'
+      + '<li>Those buttons are hidden on your own messages and your mods\' — Twitch refuses to delete or time out either.</li>'
+      + '<li>Timing someone out strikes through their other messages too, matching what Twitch does on its side.</li>'
+      + '<li>Click a <strong>name</strong> for mod, VIP, whisper and timeout.</li>'
+      + '<li>Chat only scrolls itself when you are already at the bottom, so reading back is never yanked away.</li>'
+      + '<li><strong>Clear view</strong> empties this list only. Nothing is deleted on Twitch.</li>'
+      + '</ul>'
+      + '<h3>Raid and Shoutout</h3>'
+      + '<p>Type a channel name and pick one. Raiding starts Twitch\'s 90-second countdown rather than moving people immediately, and a link to cancel it appears underneath.</p>'
+      + '<p>Twitch limits shoutouts to one every 2 minutes, and one per channel per hour. Both of you have to be live.</p>'
+      + '<h3>Polls and Predictions</h3>'
+      + '<ul>'
+      + '<li>Only one of each can run at a time — that is Twitch\'s rule, not SPARK\'s.</li>'
+      + '<li>While one is running you get live results in place of the form.</li>'
+      + '<li><strong>Templates</strong> save the question, the answers and the timer together, so a poll you run every stream is one click instead of retyping it.</li>'
+      + '<li>Predictions can be <strong>locked</strong> (no more entries, not yet paid out) before you pick a winner. <strong>Refund everyone</strong> cancels and returns the points.</li>'
+      + '</ul>'
+      + '<h3>Chat Mode and Ads</h3>'
+      + '<ul>'
+      + '<li><strong>Emote only</strong>, <strong>Subs only</strong> and <strong>Followers only</strong> are toggles — gold means on. They show their current state when you open the tab, including changes you made from Twitch itself.</li>'
+      + '<li><strong>Followers-only</strong> can require a <em>minimum follow age</em> — how long someone must already have been following before they may chat. "Any follower" lets a brand-new follower talk straight away; "10 minutes" makes them wait. Follow-and-spam bots follow and post immediately, so even a short wait stops most of them. Changing it while the mode is on applies right away.</li>'
+      + '<li><strong>Clear chat history</strong> wipes chat for everyone watching and cannot be undone, so it asks first.</li>'
+      + '<li>Ad lengths run from 30 seconds to 3 minutes. Ads need you to be live and an affiliate or partner, and Twitch enforces a cooldown between breaks — the message tells you when the next one is allowed.</li>'
+      + '<li><strong>Snooze</strong> pushes your next automatic ad back 5 minutes. You get a limited number per stream.</li>'
+      + '</ul>'
+      + '<h3>Layout</h3>'
+      + '<p>Drag the bar between chat and the actions below it to resize them. Each action section collapses by clicking its heading — a shut section still shows a tag when something is running, such as a poll or emote-only chat. SPARK remembers both.</p>'
+  },
   settings: {
     title: 'Settings',
     html: '<h3>Theme</h3>'
@@ -508,6 +562,7 @@ async function boot(){
   store.credits     = data.credits     || {};
   store.diy         = data.diy         || { widgets: [] };
   store.commands    = data.commands    || { commands:[], automessages:[], cfg:{} };
+  store.broadcast   = data.broadcast   || {};
   store.settings    = data.settings    || {};
   store.twitch_tokens = data.twitch_tokens || {};
 
@@ -533,13 +588,24 @@ async function boot(){
   const urls = await invoke('overlay_url');
   store.overlayUrls = urls;
 
+  // Fonts before any tab renders: built-in families load once for the whole app
+  // instead of each tab requesting its own overlapping Google stylesheet, and
+  // imported fonts come from the overlay server, whose URL was just read above.
+  await initFonts();
+
+  // Follower cache lives in Rust; Chat and Credits need a synchronous answer
+  // per message, so they read an in-memory mirror of it. Fetch it once, before
+  // either tab can receive a message.
+  await loadFollowerMirror();
+
   // init help system before tabs so modal is ready
   initHelpSystem();
 
   // init each tab
   await initSettings();
   // initTabChrome() runs before the data file is read, so it sees empty tool
-  // toggles. Redraw the banner now that settings are populated.
+  // toggles AND no saved sidebar layout. Apply both now that settings are in.
+  applySavedTabLayout();
   refreshDisabledBanner();
   await initWheel();
   await initGiveaway();
@@ -555,6 +621,12 @@ async function boot(){
   // Last of the tabs: its chat handler should see a fully-populated store when
   // it checks for command collisions against Counters, Goals and the rest.
   await initCommands();
+  await initBroadcast();
+
+  // Scope check runs after every tab exists — "Reconnect now" jumps to Settings,
+  // which has to be built by then. It waits on the connection status event, so
+  // nothing here blocks on Twitch being reachable.
+  initReauth();
 
   // global Twitch event forwarding
   await listen('twitch-status', ev=>{
@@ -585,6 +657,43 @@ async function boot(){
   // derives the warning and the finish from this plus the ad schedule.
   await listen('twitch-ad', ev=>{
     window.dispatchEvent(new CustomEvent('spark-ad', {detail: ev.payload}));
+  });
+  // Stream went live or ended (EventSub). Two things come out of this:
+  //
+  //   spark-stream       — every event, for anything that just needs to know
+  //                        whether you are live right now.
+  //   spark-stream-start — only when a GENUINELY new stream begins.
+  //
+  // The split exists because a dropped connection looks exactly like the end of
+  // one stream and the start of another. Coming back within the grace window is
+  // treated as the same stream, so a blip mid-broadcast cannot let everyone
+  // check in twice or wipe the first claim.
+  const STREAM_RESUME_GRACE_MS = 5 * 60 * 1000;
+  await listen('twitch-stream', ev=>{
+    const d = ev.payload || {};
+    const now = Date.now();
+
+    if(!d.live){
+      // Remembered across restarts so a crash during the gap does not turn a
+      // resume into a fresh stream. One write per stream end — negligible.
+      store.settings.lastStreamOfflineAt = now;
+      invoke('save_app_settings', { data: store.settings }).catch(()=>{});
+      window.dispatchEvent(new CustomEvent('spark-stream', {detail:{live:false}}));
+      return;
+    }
+
+    const lastOff = store.settings.lastStreamOfflineAt || 0;
+    const resumed = lastOff > 0 && (now - lastOff) < STREAM_RESUME_GRACE_MS;
+    window.dispatchEvent(new CustomEvent('spark-stream', {detail:{live:true, resumed, startedAt:d.started_at}}));
+    if(!resumed){
+      window.dispatchEvent(new CustomEvent('spark-stream-start', {detail:{startedAt:d.started_at}}));
+    }
+    // Either way this stream is running now; clear the marker so a later
+    // genuine start is not measured against a stale timestamp.
+    if(store.settings.lastStreamOfflineAt){
+      store.settings.lastStreamOfflineAt = 0;
+      invoke('save_app_settings', { data: store.settings }).catch(()=>{});
+    }
   });
   // Chat sends are queued in Rust, so a failure arrives as this event rather
   // than as a rejected invoke().

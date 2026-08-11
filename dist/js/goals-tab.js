@@ -1,5 +1,6 @@
 import { store, toolEnabled, toolBlocked } from './store.js';
 import { $, esc, renderOverlayBar } from './utils.js';
+import { fontOptionsHtml } from './fonts.js';
 import { drawGoalBar, loadGoogleFont } from './bar-renderer.js';
 import { playSound as playAudioFile } from './audio.js';
 
@@ -10,7 +11,7 @@ const dialog = window.__TAURI__.dialog;
 const PREV_H = { h: 400, v: 80  }; // horizontal preview width, vertical preview width
 const PREV_W = { h: 80,  v: 300 }; // horizontal preview height, vertical preview height
 
-const GOOGLE_FONTS = ['Segoe UI','Roboto','Oswald','Bebas Neue','Montserrat','Orbitron','Press Start 2P','Rajdhani'];
+// Font list now shared app-wide — see fonts.js.
 const DEFAULT_EMOJIS = ['🎉','🎊','✨','🥳','⭐','🎈','🎆','🎇'];
 
 // Themes: each has bgColor, borderColor, fillColor, fillColor2, textColor
@@ -227,7 +228,7 @@ function openEditor(bar){
     modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:9999;display:flex;align-items:center;justify-content:center';
 
     const themeOpts=Object.keys(THEMES).map(k=>`<option value="${k}" ${(bar._theme||'Custom')===k?'selected':''}>${k}</option>`).join('');
-    const fontOpts=GOOGLE_FONTS.map(f=>`<option value="${f}" ${bar.font===f?'selected':''}>${f}</option>`).join('');
+    const fontOpts=fontOptionsHtml(bar.font);
     // Work on a draft — milestone edits only land on the bar when Save is
     // clicked, so Cancel/X actually cancels.
     const msDraft=JSON.parse(JSON.stringify(bar.milestones||[]));

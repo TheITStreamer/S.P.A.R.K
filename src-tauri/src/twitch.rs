@@ -8,7 +8,27 @@ use crate::Shared;
 // Scopes requested for the broadcaster token. A saved token only carries the
 // scopes it was granted, so twitch_token_scopes() lets Settings compare the two
 // and prompt for a reconnect when this list has grown.
-const SCOPES: &str = "channel:read:redemptions channel:manage:redemptions channel:read:subscriptions moderator:read:followers bits:read chat:read user:write:chat moderator:manage:announcements channel:read:ads";
+// Twitch's own docs warn that requesting scopes the app does not actually use
+// can get an application suspended, so every entry here must map to a call
+// SPARK really makes. The Broadcast tab block below is the reason for the
+// second half of this list.
+const SCOPES: &str = concat!(
+    "channel:read:redemptions channel:manage:redemptions channel:read:subscriptions ",
+    "moderator:read:followers bits:read chat:read user:write:chat ",
+    "moderator:manage:announcements channel:read:ads ",
+    // Broadcast tab. Note two of these pull double duty:
+    //   channel:manage:broadcast     title/category/tags AND stream markers
+    //   moderator:manage:chat_messages  deleting messages AND pinning them
+    "channel:manage:broadcast ",
+    "moderator:manage:banned_users moderator:manage:chat_messages ",
+    "channel:manage:raids moderator:manage:shoutouts ",
+    "channel:manage:polls channel:manage:predictions ",
+    "channel:manage:moderators channel:manage:vips user:manage:whispers ",
+    // Ads and chat modes, also Broadcast tab.
+    // channel:read:ads (above) reads the schedule; these two ACT on it.
+    "channel:edit:commercial channel:manage:ads ",
+    "moderator:read:chat_settings moderator:manage:chat_settings"
+);
 
 // Scopes for an optional bot account. Deliberately minimal: the bot only ever
 // SENDS. Reading chat, EventSub and redeems all stay on the broadcaster token.
@@ -427,8 +447,10 @@ pub async fn twitch_update_redemption(app: tauri::AppHandle, reward_id: String, 
 // ── Follower / subscriber checks ──────────────────────────────────────────────
 
 // Follower status barely changes mid-stream; cache it so busy chat doesn't
-// hammer Helix with one API call per !command per user.
-const FOLLOWER_CACHE_TTL_SECS: u64 = 600;
+// hammer Helix with one API call per !command per user. The TTL and the cache
+// itself now live in lib.rs — this used to be a second, shorter-lived cache
+// sitting alongside a persistent one in the frontend, and the two disagreed.
+use crate::FOLLOWER_TTL_SECS as FOLLOWER_CACHE_TTL_SECS;
 
 #[tauri::command]
 pub async fn twitch_check_follower(app: tauri::AppHandle, user_id: String, broadcaster_id: String) -> Result<bool, String> {
@@ -456,6 +478,9 @@ pub async fn twitch_check_follower(app: tauri::AppHandle, user_id: String, broad
             if cache.len() > 5000 { cache.retain(|_, (_, at)| now.saturating_sub(*at) < FOLLOWER_CACHE_TTL_SECS); }
             cache.insert(user_id, (is_follower, now));
         }
+        // Flushed to its own file by the background thread, not written here —
+        // this runs on the busy path.
+        shared.follower_dirty.store(true, Ordering::SeqCst);
         Ok(is_follower)
     }).await.map_err(|e| e.to_string())?
 }
@@ -608,6 +633,14 @@ fn run_eventsub(app: &tauri::AppHandle, stop: std::sync::Arc<std::sync::atomic::
                             // "ads finished" event, so the frontend derives those two
                             // from the ad schedule and from start + duration.
                             let _ = subscribe(access, client_id, &sid, "channel.ad_break.begin", "1", json!({"broadcaster_user_id":uid}));
+                            // Stream start/stop. Neither needs a scope, so these
+                            // cost nothing and replace polling Get Streams for
+                            // the "only while live" gate. They also give the
+                            // frontend a real per-stream boundary to reset
+                            // check-ins and the credits roster on, instead of
+                            // guessing from when the app happened to launch.
+                            let _ = subscribe(access, client_id, &sid, "stream.online",  "1", json!({"broadcaster_user_id":uid}));
+                            let _ = subscribe(access, client_id, &sid, "stream.offline", "1", json!({"broadcaster_user_id":uid}));
                         }
                         "session_reconnect" => {
                             reconnect_url = v["payload"]["session"]["reconnect_url"].as_str().map(|s| s.to_string());
@@ -699,6 +732,21 @@ fn run_eventsub(app: &tauri::AppHandle, stop: std::sync::Arc<std::sync::atomic::
                                     "kind": "begin",
                                     "duration": ev["duration_seconds"],
                                     "is_automatic": ev["is_automatic"],
+                                    "started_at": ev["started_at"],
+                                }));
+                            }
+                            // Stream went live / ended. The cached stream info is
+                            // cleared as well as forwarded: anything asking "am I
+                            // live" a second later must not be answered from a
+                            // snapshot taken before this arrived.
+                            if sub_type == "stream.online" || sub_type == "stream.offline" {
+                                let live = sub_type == "stream.online";
+                                {
+                                    let shared = app.state::<Shared>();
+                                    *shared.stream_info_cache.lock().unwrap() = None;
+                                }
+                                let _ = app.emit("twitch-stream", json!({
+                                    "live": live,
                                     "started_at": ev["started_at"],
                                 }));
                             }
@@ -869,10 +917,16 @@ fn parse_irc(raw: &str) -> Option<Value> {
     // emotes from ANY channel, since Twitch identifies them per message.
     let emotes = tags.get("emotes").copied().unwrap_or("");
 
+    // Twitch's per-message id. Deleting a single message needs it, and it is
+    // the only handle we ever get — it is not derivable from anything else in
+    // the line, so it has to be carried through with the message itself.
+    let msg_id = tags.get("id").copied().unwrap_or("");
+
     Some(json!({
         "username":    username,
         "display":     display,
         "user_id":     user_id,
+        "msg_id":      msg_id,
         "message":     message.trim_end(),
         "is_mod":      is_mod,
         "is_sub":      is_sub,
@@ -918,10 +972,39 @@ fn enqueue(shared: &Shared, item: crate::QueuedSend) {
     shared.send_wake.notify_one();
 }
 
+// Unchanged signature, unchanged behaviour: the bot says it when one is
+// connected, otherwise the broadcaster does. Every tab in SPARK calls this and
+// none of them cares who it comes from, so it deliberately takes no account
+// argument — see twitch_send_chat_as below for the case that does.
 #[tauri::command]
 pub fn twitch_send_chat_message(shared: State<Shared>, message: String) -> Result<(), String> {
     if message.trim().is_empty() { return Ok(()); }
-    enqueue(&shared, crate::QueuedSend { announce: false, message, color: String::new() });
+    enqueue(&shared, crate::QueuedSend {
+        announce: false, message, color: String::new(), as_acct: None,
+    });
+    Ok(())
+}
+
+// Send as a NAMED account: "bot" or "broadcaster". Used by the Broadcast tab's
+// chat box, where you are talking to chat yourself and it matters whose name
+// appears.
+//
+// This is a separate command rather than an optional argument on the one above
+// on purpose. That one is called from seven other files; widening its signature
+// would put every chat message in SPARK behind an assumption about how missing
+// arguments deserialise, and that is not a thing to gamble on for the busiest
+// path in the app.
+#[tauri::command]
+pub fn twitch_send_chat_as(shared: State<Shared>, message: String, as_account: String) -> Result<(), String> {
+    if message.trim().is_empty() { return Ok(()); }
+    let want = match as_account.as_str() {
+        "broadcaster" => Some("broadcaster".to_string()),
+        "bot"         => Some("bot".to_string()),
+        _             => None,
+    };
+    enqueue(&shared, crate::QueuedSend {
+        announce: false, message, color: String::new(), as_acct: want,
+    });
     Ok(())
 }
 
@@ -1038,7 +1121,20 @@ pub fn start_sender(app: tauri::AppHandle) {
 
             // ── Send, bot first when one is connected ──
             let shared = app.state::<Shared>();
-            let use_bot = bot_connected(&shared);
+            // Which account says it. An explicit choice wins; otherwise the
+            // old rule applies (bot when there is one).
+            //
+            // Note the asymmetry, and it is deliberate: asking for the
+            // broadcaster NEVER silently becomes the bot, because the point of
+            // choosing is that the message appears under your own name. Asking
+            // for the bot when none is connected still falls back to you —
+            // better a message from the wrong name than no message at all.
+            let want = item.as_acct.as_deref().unwrap_or("");
+            let use_bot = match want {
+                "broadcaster" => false,
+                "bot"         => bot_connected(&shared),
+                _             => bot_connected(&shared),
+            };
             let mut result = if use_bot {
                 if item.announce { post_announcement(&shared, Acct::Bot, &text, &item.color) }
                 else             { post_chat(&shared, Acct::Bot, &text) }
@@ -1116,7 +1212,9 @@ pub fn start_sender(app: tauri::AppHandle) {
 #[tauri::command]
 pub fn twitch_send_announcement(shared: State<Shared>, message: String, color: String) -> Result<(), String> {
     if message.trim().is_empty() { return Ok(()); }
-    enqueue(&shared, crate::QueuedSend { announce: true, message, color });
+    enqueue(&shared, crate::QueuedSend {
+        announce: true, message, color, as_acct: None,
+    });
     Ok(())
 }
 
@@ -1136,6 +1234,15 @@ pub async fn twitch_token_scopes(app: tauri::AppHandle) -> Result<Vec<String>, S
         Ok(v.get("scopes").and_then(|s| s.as_array()).cloned().unwrap_or_default()
             .into_iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
     }).await.map_err(|e| e.to_string())?
+}
+
+// The scopes THIS build asks for. Exposed so the re-auth check has one source
+// of truth: adding a scope to SCOPES above is all a future release has to do —
+// the startup check picks it up with no matching frontend edit. Local only,
+// no network, so it is safe to call on every boot.
+#[tauri::command]
+pub fn twitch_required_scopes() -> Vec<String> {
+    SCOPES.split_whitespace().map(|s| s.to_string()).collect()
 }
 
 // ── Stream info (for {uptime} / {game} / {title} command variables) ───────────
@@ -1396,5 +1503,898 @@ pub async fn twitch_get_user_info(app: tauri::AppHandle, user_id: String) -> Res
             "display_name": user.get("display_name").cloned().unwrap_or(Value::Null),
             "profile_image_url": user.get("profile_image_url").cloned().unwrap_or(Value::Null),
         }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// ── Broadcast tab ─────────────────────────────────────────────────────────────
+// Everything the Broadcast tab calls. Grouped here rather than scattered so the
+// scope list at the top of this file has one obvious place to point at.
+//
+// All of these follow the same shape as the rest of the file: async command,
+// spawn_blocking around a blocking reqwest call, so nothing touches the UI
+// thread. See the 5 Aug session notes for why that matters.
+
+// Small helper: Helix returns errors as {"message": "..."} and the raw status
+// on its own is useless to show a streamer mid-broadcast.
+fn helix_err(status: reqwest::StatusCode, body: &Value, fallback: &str) -> String {
+    body.get("message").and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("{} ({})", fallback, status.as_u16()))
+}
+
+// Modify Channel Information. Every field is optional — sending only the ones
+// that changed avoids clobbering a title when the user only picked a category.
+// Tags replace the existing set wholesale; that is Twitch's behaviour, not ours.
+#[tauri::command]
+pub async fn twitch_update_channel_info(
+    app: tauri::AppHandle,
+    title: Option<String>,
+    game_id: Option<String>,
+    tags: Option<Vec<String>>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+
+        let mut body = serde_json::Map::new();
+        if let Some(t) = title.as_ref() {
+            let t = t.trim();
+            if t.is_empty() { return Err("A stream title cannot be empty.".into()); }
+            if t.chars().count() > 140 { return Err("Titles are limited to 140 characters.".into()); }
+            body.insert("title".into(), json!(t));
+        }
+        if let Some(g) = game_id.as_ref() { body.insert("game_id".into(), json!(g)); }
+        if let Some(tg) = tags.as_ref() {
+            // Twitch: max 10 tags, 25 characters each, no spaces inside a tag.
+            let cleaned: Vec<String> = tg.iter()
+                .map(|s| s.trim().replace(' ', ""))
+                .filter(|s| !s.is_empty())
+                .take(10)
+                .collect();
+            if cleaned.iter().any(|s| s.chars().count() > 25) {
+                return Err("Tags are limited to 25 characters each.".into());
+            }
+            body.insert("tags".into(), json!(cleaned));
+        }
+        if body.is_empty() { return Ok(()); }
+
+        let c = reqwest::blocking::Client::new();
+        let r = c.patch("https://api.twitch.tv/helix/channels")
+            .query(&[("broadcaster_id", uid.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&Value::Object(body))
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            return Err(helix_err(status, &v, "Could not update your channel"));
+        }
+        // The cached copy is now wrong by definition.
+        *shared.stream_info_cache.lock().unwrap() = None;
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// Current title, category (id AND name) and tags. Get Streams does not return
+// tags or a game id reliably, so the Broadcast tab reads the channel directly
+// rather than reusing the cached twitch_get_stream_info.
+#[tauri::command]
+pub async fn twitch_get_channel_info(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.get("https://api.twitch.tv/helix/channels")
+            .query(&[("broadcaster_id", uid.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        let v: Value = r.json().unwrap_or(json!({}));
+        if !status.is_success() { return Err(helix_err(status, &v, "Could not read your channel")); }
+        let ch = v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()).cloned()
+            .unwrap_or(json!({}));
+        Ok(json!({
+            "title":     ch.get("title").cloned().unwrap_or(json!("")),
+            "game_id":   ch.get("game_id").cloned().unwrap_or(json!("")),
+            "game_name": ch.get("game_name").cloned().unwrap_or(json!("")),
+            "tags":      ch.get("tags").cloned().unwrap_or(json!([])),
+            "language":  ch.get("broadcaster_language").cloned().unwrap_or(json!("")),
+        }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// Category search for the picker. Needs no scope, so it stays available even if
+// the user has not reconnected for the Broadcast scopes yet.
+#[tauri::command]
+pub async fn twitch_search_categories(app: tauri::AppHandle, query: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let q = query.trim().to_string();
+        if q.is_empty() { return Ok(json!([])); }
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.get("https://api.twitch.tv/helix/search/categories")
+            .query(&[("query", q.as_str()), ("first", "12")])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        let v: Value = r.json().unwrap_or(json!({}));
+        if !status.is_success() { return Err(helix_err(status, &v, "Category search failed")); }
+        let list: Vec<Value> = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default()
+            .into_iter().map(|g| json!({
+                "id":       g.get("id").cloned().unwrap_or(Value::Null),
+                "name":     g.get("name").cloned().unwrap_or(Value::Null),
+                // box_art_url carries {width}x{height} placeholders.
+                "box_art":  g.get("box_art_url").and_then(|x| x.as_str())
+                             .map(|s| s.replace("{width}", "52").replace("{height}", "72"))
+                             .map(Value::from).unwrap_or(Value::Null),
+            })).collect();
+        Ok(Value::Array(list))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// Stream marker. Free with channel:manage:broadcast — same scope as the title
+// edit above, which is why it lives in this tab rather than costing its own.
+// Twitch rejects markers when the channel is not live; say so plainly.
+#[tauri::command]
+pub async fn twitch_create_stream_marker(app: tauri::AppHandle, description: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let mut body = json!({ "user_id": uid });
+        let d = description.trim();
+        if !d.is_empty() { body["description"] = json!(d.chars().take(140).collect::<String>()); }
+
+        let c = reqwest::blocking::Client::new();
+        let r = c.post("https://api.twitch.tv/helix/streams/markers")
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&body)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        let v: Value = r.json().unwrap_or(json!({}));
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err("Markers only work while you are live.".into());
+        }
+        if !status.is_success() { return Err(helix_err(status, &v, "Could not create a marker")); }
+        let m = v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()).cloned()
+            .unwrap_or(json!({}));
+        Ok(json!({
+            "id":       m.get("id").cloned().unwrap_or(Value::Null),
+            "position": m.get("position_seconds").cloned().unwrap_or(Value::Null),
+        }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// ── Moderation ────────────────────────────────────────────────────────────────
+// SPARK is always acting AS the broadcaster, so moderator_id is always our own
+// user id. Twitch still wants both parameters spelled out.
+
+// Timeout when duration is Some, permanent ban when None. One endpoint covers
+// both, and collapsing them here keeps the two buttons in the UI honest about
+// being the same underlying action.
+#[tauri::command]
+pub async fn twitch_ban_user(
+    app: tauri::AppHandle,
+    user_id: String,
+    duration: Option<u32>,
+    reason: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if user_id.trim().is_empty() { return Err("No user to act on.".into()); }
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+
+        let mut d = serde_json::Map::new();
+        d.insert("user_id".into(), json!(user_id));
+        if let Some(secs) = duration {
+            // Twitch caps a timeout at 1209600 seconds (14 days).
+            d.insert("duration".into(), json!(secs.clamp(1, 1_209_600)));
+        }
+        if let Some(r) = reason.as_ref() {
+            let r = r.trim();
+            if !r.is_empty() { d.insert("reason".into(), json!(r.chars().take(500).collect::<String>())); }
+        }
+
+        let c = reqwest::blocking::Client::new();
+        let r = c.post("https://api.twitch.tv/helix/moderation/bans")
+            .query(&[("broadcaster_id", uid.as_str()), ("moderator_id", uid.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&json!({ "data": Value::Object(d) }))
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            // The most common failure by far: you cannot time out a mod, and
+            // the raw message does not say so clearly.
+            if status == reqwest::StatusCode::BAD_REQUEST {
+                let m = v.get("message").and_then(|x| x.as_str()).unwrap_or("");
+                if m.to_lowercase().contains("moderator") {
+                    return Err("You cannot time out or ban a moderator. Remove their mod status first.".into());
+                }
+            }
+            return Err(helix_err(status, &v, "That moderation action failed"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn twitch_unban_user(app: tauri::AppHandle, user_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if user_id.trim().is_empty() { return Err("No user to act on.".into()); }
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.delete("https://api.twitch.tv/helix/moderation/bans")
+            .query(&[("broadcaster_id", uid.as_str()), ("moderator_id", uid.as_str()),
+                     ("user_id", user_id.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            return Err(helix_err(status, &v, "Could not undo that"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// Delete one message, or clear the whole chat when message_id is empty.
+// message_id comes from the IRC "id" tag (see parse_irc) and is the only handle
+// Twitch gives us for a specific message.
+#[tauri::command]
+pub async fn twitch_delete_message(app: tauri::AppHandle, message_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+
+        let mut q = vec![("broadcaster_id", uid.clone()), ("moderator_id", uid.clone())];
+        if !message_id.trim().is_empty() { q.push(("message_id", message_id.clone())); }
+
+        let r = c.delete("https://api.twitch.tv/helix/moderation/chat")
+            .query(&q)
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            // Twitch refuses to delete anything older than 6 hours, and refuses
+            // outright to delete a broadcaster's or moderator's message.
+            if status == reqwest::StatusCode::NOT_FOUND {
+                return Err("That message is too old to delete, or has already gone.".into());
+            }
+            if status == reqwest::StatusCode::FORBIDDEN {
+                return Err("Twitch does not allow deleting a moderator's or the broadcaster's messages.".into());
+            }
+            return Err(helix_err(status, &v, "Could not delete that message"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// Pin / unpin. Free with moderator:manage:chat_messages — the same scope the
+// delete above already needs.
+#[tauri::command]
+pub async fn twitch_pin_message(app: tauri::AppHandle, message_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if message_id.trim().is_empty() { return Err("No message to pin.".into()); }
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.post("https://api.twitch.tv/helix/chat/pins")
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&json!({
+                "broadcaster_id": uid,
+                "sender_id":      uid,
+                "message_id":     message_id,
+            }))
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            return Err(helix_err(status, &v, "Could not pin that message"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// ── Quick actions ─────────────────────────────────────────────────────────────
+
+// Raid. Twitch does NOT start the raid immediately — it opens the 90-second
+// warning on stream and the raid fires when that elapses (or when you click
+// through on Twitch). Say so, or it looks broken.
+#[tauri::command]
+pub async fn twitch_start_raid(app: tauri::AppHandle, target_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if target_id.trim().is_empty() { return Err("Pick a channel to raid first.".into()); }
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        if target_id == uid { return Err("You cannot raid your own channel.".into()); }
+        let c = reqwest::blocking::Client::new();
+        let r = c.post("https://api.twitch.tv/helix/raids")
+            .query(&[("from_broadcaster_id", uid.as_str()), ("to_broadcaster_id", target_id.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            if status == reqwest::StatusCode::BAD_REQUEST {
+                return Err("Twitch refused that raid. The channel may not exist, or you may already have a raid pending.".into());
+            }
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err("You are raiding too often — Twitch is rate-limiting it.".into());
+            }
+            return Err(helix_err(status, &v, "Could not start that raid"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn twitch_cancel_raid(app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.delete("https://api.twitch.tv/helix/raids")
+            .query(&[("broadcaster_id", uid.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if status == reqwest::StatusCode::NOT_FOUND { return Err("There is no raid to cancel.".into()); }
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            return Err(helix_err(status, &v, "Could not cancel the raid"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// Shoutout. Twitch enforces two cooldowns of its own (2 minutes between any two
+// shoutouts, 60 minutes per target) and requires the channel to be live.
+#[tauri::command]
+pub async fn twitch_send_shoutout(app: tauri::AppHandle, target_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if target_id.trim().is_empty() { return Err("Pick someone to shout out first.".into()); }
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        if target_id == uid { return Err("You cannot shout out your own channel.".into()); }
+        let c = reqwest::blocking::Client::new();
+        let r = c.post("https://api.twitch.tv/helix/chat/shoutouts")
+            .query(&[("from_broadcaster_id", uid.as_str()),
+                     ("to_broadcaster_id", target_id.as_str()),
+                     ("moderator_id", uid.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                return Err("Twitch is still cooling down from the last shoutout. It allows one every 2 minutes, and one per channel per hour.".into());
+            }
+            if status == reqwest::StatusCode::BAD_REQUEST {
+                return Err("Shoutouts only work while you are live.".into());
+            }
+            return Err(helix_err(status, &v, "Could not send that shoutout"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// ── Polls and predictions ─────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn twitch_create_poll(
+    app: tauri::AppHandle,
+    title: String,
+    choices: Vec<String>,
+    duration: u32,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let title = title.trim().to_string();
+        if title.is_empty() { return Err("Give the poll a question.".into()); }
+        if title.chars().count() > 60 { return Err("Poll questions are limited to 60 characters.".into()); }
+        let opts: Vec<String> = choices.iter().map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()).collect();
+        if opts.len() < 2 { return Err("A poll needs at least two answers.".into()); }
+        if opts.len() > 5 { return Err("Twitch allows five answers at most.".into()); }
+        if opts.iter().any(|o| o.chars().count() > 25) {
+            return Err("Poll answers are limited to 25 characters each.".into());
+        }
+
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.post("https://api.twitch.tv/helix/polls")
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&json!({
+                "broadcaster_id": uid,
+                "title": title,
+                "choices": opts.iter().map(|t| json!({"title": t})).collect::<Vec<Value>>(),
+                // Twitch accepts 15..1800 seconds.
+                "duration": duration.clamp(15, 1800),
+            }))
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        let v: Value = r.json().unwrap_or(json!({}));
+        if !status.is_success() {
+            if status == reqwest::StatusCode::BAD_REQUEST {
+                return Err("Twitch refused that poll. You may already have one running — only one poll can be active at a time.".into());
+            }
+            return Err(helix_err(status, &v, "Could not create that poll"));
+        }
+        let p = v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()).cloned()
+            .unwrap_or(json!({}));
+        Ok(json!({ "id": p.get("id").cloned().unwrap_or(Value::Null) }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// status: "TERMINATED" ends it and shows the result, "ARCHIVED" hides it.
+#[tauri::command]
+pub async fn twitch_end_poll(app: tauri::AppHandle, poll_id: String, status: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if poll_id.trim().is_empty() { return Err("No poll to end.".into()); }
+        let st = if status == "ARCHIVED" { "ARCHIVED" } else { "TERMINATED" };
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.patch("https://api.twitch.tv/helix/polls")
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&json!({ "broadcaster_id": uid, "id": poll_id, "status": st }))
+            .send().map_err(|e| e.to_string())?;
+        let s = r.status();
+        if !s.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            return Err(helix_err(s, &v, "Could not end that poll"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// The one currently-running poll, or null. Used to show live results and to
+// keep the End button honest across an app restart.
+#[tauri::command]
+pub async fn twitch_get_active_poll(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.get("https://api.twitch.tv/helix/polls")
+            .query(&[("broadcaster_id", uid.as_str()), ("first", "1")])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        if !r.status().is_success() { return Ok(Value::Null); }
+        let v: Value = r.json().unwrap_or(json!({}));
+        let p = match v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()) {
+            Some(p) => p.clone(), None => return Ok(Value::Null),
+        };
+        if p.get("status").and_then(|x| x.as_str()) != Some("ACTIVE") { return Ok(Value::Null); }
+        Ok(json!({
+            "id":      p.get("id").cloned().unwrap_or(Value::Null),
+            "title":   p.get("title").cloned().unwrap_or(Value::Null),
+            "ends_at": p.get("ends_at").cloned().unwrap_or(Value::Null),
+            "choices": p.get("choices").and_then(|c| c.as_array()).map(|arr| arr.iter().map(|ch| json!({
+                "title": ch.get("title").cloned().unwrap_or(Value::Null),
+                "votes": ch.get("votes").cloned().unwrap_or(json!(0)),
+            })).collect::<Vec<Value>>()).unwrap_or_default(),
+        }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn twitch_create_prediction(
+    app: tauri::AppHandle,
+    title: String,
+    outcomes: Vec<String>,
+    window: u32,
+) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let title = title.trim().to_string();
+        if title.is_empty() { return Err("Give the prediction a question.".into()); }
+        if title.chars().count() > 45 { return Err("Prediction questions are limited to 45 characters.".into()); }
+        let outs: Vec<String> = outcomes.iter().map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()).collect();
+        // Twitch takes 2 to 10 outcomes.
+        if outs.len() < 2 { return Err("A prediction needs at least two outcomes.".into()); }
+        if outs.len() > 10 { return Err("Twitch allows ten outcomes at most.".into()); }
+        if outs.iter().any(|o| o.chars().count() > 25) {
+            return Err("Prediction outcomes are limited to 25 characters each.".into());
+        }
+
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.post("https://api.twitch.tv/helix/predictions")
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&json!({
+                "broadcaster_id": uid,
+                "title": title,
+                "outcomes": outs.iter().map(|t| json!({"title": t})).collect::<Vec<Value>>(),
+                "prediction_window": window.clamp(30, 1800),
+            }))
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        let v: Value = r.json().unwrap_or(json!({}));
+        if !status.is_success() {
+            if status == reqwest::StatusCode::BAD_REQUEST {
+                return Err("Twitch refused that prediction. You may already have one running — only one can be active at a time.".into());
+            }
+            return Err(helix_err(status, &v, "Could not create that prediction"));
+        }
+        Ok(json!({ "id": v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first())
+                     .and_then(|p| p.get("id")).cloned().unwrap_or(Value::Null) }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// status: RESOLVED (needs winning_outcome_id) | CANCELED | LOCKED
+#[tauri::command]
+pub async fn twitch_end_prediction(
+    app: tauri::AppHandle,
+    prediction_id: String,
+    status: String,
+    winning_outcome_id: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if prediction_id.trim().is_empty() { return Err("No prediction to end.".into()); }
+        let st = match status.as_str() {
+            "RESOLVED" | "CANCELED" | "LOCKED" => status.as_str(),
+            _ => "CANCELED",
+        };
+        if st == "RESOLVED" && winning_outcome_id.as_deref().unwrap_or("").is_empty() {
+            return Err("Pick the winning outcome first.".into());
+        }
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let mut body = json!({ "broadcaster_id": uid, "id": prediction_id, "status": st });
+        if st == "RESOLVED" {
+            body["winning_outcome_id"] = json!(winning_outcome_id.unwrap_or_default());
+        }
+        let c = reqwest::blocking::Client::new();
+        let r = c.patch("https://api.twitch.tv/helix/predictions")
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&body)
+            .send().map_err(|e| e.to_string())?;
+        let s = r.status();
+        if !s.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            return Err(helix_err(s, &v, "Could not end that prediction"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// Active or locked prediction, or null. A LOCKED one still needs resolving, so
+// unlike polls this deliberately does not filter it out.
+#[tauri::command]
+pub async fn twitch_get_active_prediction(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.get("https://api.twitch.tv/helix/predictions")
+            .query(&[("broadcaster_id", uid.as_str()), ("first", "1")])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        if !r.status().is_success() { return Ok(Value::Null); }
+        let v: Value = r.json().unwrap_or(json!({}));
+        let p = match v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()) {
+            Some(p) => p.clone(), None => return Ok(Value::Null),
+        };
+        let st = p.get("status").and_then(|x| x.as_str()).unwrap_or("");
+        if st != "ACTIVE" && st != "LOCKED" { return Ok(Value::Null); }
+        Ok(json!({
+            "id":     p.get("id").cloned().unwrap_or(Value::Null),
+            "title":  p.get("title").cloned().unwrap_or(Value::Null),
+            "status": st,
+            "locks_at": p.get("locks_at").cloned().unwrap_or(Value::Null),
+            "outcomes": p.get("outcomes").and_then(|c| c.as_array()).map(|arr| arr.iter().map(|o| json!({
+                "id":     o.get("id").cloned().unwrap_or(Value::Null),
+                "title":  o.get("title").cloned().unwrap_or(Value::Null),
+                "points": o.get("channel_points").cloned().unwrap_or(json!(0)),
+                "users":  o.get("users").cloned().unwrap_or(json!(0)),
+            })).collect::<Vec<Value>>()).unwrap_or_default(),
+        }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// ── Chatter actions ───────────────────────────────────────────────────────────
+
+// add=true grants the role, false removes it. Twitch uses POST/DELETE on the
+// same endpoint, so one command covers both and the UI can toggle.
+#[tauri::command]
+pub async fn twitch_set_moderator(app: tauri::AppHandle, user_id: String, add: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if user_id.trim().is_empty() { return Err("No user to act on.".into()); }
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let url = "https://api.twitch.tv/helix/moderation/moderators";
+        let req = if add { c.post(url) } else { c.delete(url) };
+        let r = req
+            .query(&[("broadcaster_id", uid.as_str()), ("user_id", user_id.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+                return Err("Twitch will not do that — a VIP cannot be made a mod directly. Remove their VIP status first.".into());
+            }
+            return Err(helix_err(status, &v, "Could not change that mod status"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn twitch_set_vip(app: tauri::AppHandle, user_id: String, add: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if user_id.trim().is_empty() { return Err("No user to act on.".into()); }
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let url = "https://api.twitch.tv/helix/channels/vips";
+        let req = if add { c.post(url) } else { c.delete(url) };
+        let r = req
+            .query(&[("broadcaster_id", uid.as_str()), ("user_id", user_id.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            if status == reqwest::StatusCode::UNPROCESSABLE_ENTITY {
+                return Err("Twitch will not do that — a moderator cannot be made a VIP directly, and you may be out of VIP slots.".into());
+            }
+            if status == reqwest::StatusCode::CONFLICT {
+                return Err("You have no VIP slots left. Twitch grants more as the channel grows.".into());
+            }
+            return Err(helix_err(status, &v, "Could not change that VIP status"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// Whispers. Twitch silently drops whispers from accounts without a verified
+// phone number, and returns 401 for accounts it does not trust yet.
+#[tauri::command]
+pub async fn twitch_send_whisper(app: tauri::AppHandle, user_id: String, message: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let msg = message.trim().to_string();
+        if user_id.trim().is_empty() { return Err("No one to whisper.".into()); }
+        if msg.is_empty() { return Err("The whisper is empty.".into()); }
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        if user_id == uid { return Err("You cannot whisper yourself.".into()); }
+        let c = reqwest::blocking::Client::new();
+        let r = c.post("https://api.twitch.tv/helix/whispers")
+            .query(&[("from_user_id", uid.as_str()), ("to_user_id", user_id.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&json!({ "message": msg.chars().take(500).collect::<String>() }))
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                return Err("Twitch only allows whispers from accounts with a verified phone number.".into());
+            }
+            if status == reqwest::StatusCode::FORBIDDEN {
+                return Err("That user does not accept whispers from people they do not follow.".into());
+            }
+            return Err(helix_err(status, &v, "Could not send that whisper"));
+        }
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// ── Ads ───────────────────────────────────────────────────────────────────────
+// Reading the ad schedule lives further up (twitch_get_ad_schedule) and needs
+// only channel:read:ads. These two ACT on ads and each cost their own scope.
+
+// Start a commercial. Twitch takes a length in seconds and serves roughly that.
+// Affiliates and partners only, live only, and there is a cooldown between
+// commercials — all three come back as a 400, so they are spelled out.
+#[tauri::command]
+pub async fn twitch_start_commercial(app: tauri::AppHandle, length: u32) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.post("https://api.twitch.tv/helix/channels/commercial")
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&json!({ "broadcaster_id": uid, "length": length.clamp(1, 180) }))
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        let v: Value = r.json().unwrap_or(json!({}));
+        if !status.is_success() {
+            let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("");
+            if status == reqwest::StatusCode::BAD_REQUEST {
+                let low = msg.to_lowercase();
+                if low.contains("live")     { return Err("Ads only run while you are live.".into()); }
+                if low.contains("cooldown") { return Err("Twitch is still cooling down from your last ad break.".into()); }
+                return Err(if msg.is_empty() {
+                    "Twitch refused that ad break. Only affiliates and partners can run ads.".to_string()
+                } else { msg.to_string() });
+            }
+            return Err(helix_err(status, &v, "Could not start that ad break"));
+        }
+        let d = v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()).cloned()
+            .unwrap_or(json!({}));
+        Ok(json!({
+            "length":      d.get("length").cloned().unwrap_or(Value::Null),
+            // Seconds until another commercial is allowed. Worth surfacing:
+            // the button is otherwise dead for several minutes with no reason.
+            "retry_after": d.get("retry_after").cloned().unwrap_or(Value::Null),
+            "message":     d.get("message").cloned().unwrap_or(Value::Null),
+        }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// Pushes the next automatic mid-roll back by 5 minutes. A channel gets a
+// limited number of these per stream; running out is a 429.
+#[tauri::command]
+pub async fn twitch_snooze_ad(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.post("https://api.twitch.tv/helix/channels/ads/schedule/snooze")
+            .query(&[("broadcaster_id", uid.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        let v: Value = r.json().unwrap_or(json!({}));
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err("You have no snoozes left this stream.".into());
+        }
+        if status == reqwest::StatusCode::BAD_REQUEST {
+            return Err("Nothing to snooze — you are either offline or have no ad break scheduled.".into());
+        }
+        if !status.is_success() { return Err(helix_err(status, &v, "Could not snooze the next ad")); }
+        let d = v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()).cloned()
+            .unwrap_or(json!({}));
+        Ok(json!({
+            "snooze_count":     d.get("snooze_count").cloned().unwrap_or(Value::Null),
+            "snooze_refresh_at":d.get("snooze_refresh_at").cloned().unwrap_or(Value::Null),
+            "next_ad_at":       d.get("next_ad_at").cloned().unwrap_or(Value::Null),
+        }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// ── Chat modes ────────────────────────────────────────────────────────────────
+// Emote-only, subscriber-only, follower-only and friends.
+//
+// !! FIELD NAMES NOT VERIFIED AGAINST LIVE DOCS !!
+// The scopes and endpoint below ARE verified (dev.twitch.tv scope table,
+// 2026-07-31), but the reference page truncated before the chat-settings
+// section, so the body field names come from prior knowledge. If a toggle comes
+// back with "Invalid parameter", that is what to check first. The failure mode
+// is a visible error, not silent data loss.
+
+#[tauri::command]
+pub async fn twitch_get_chat_settings(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.get("https://api.twitch.tv/helix/chat/settings")
+            .query(&[("broadcaster_id", uid.as_str()), ("moderator_id", uid.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        let v: Value = r.json().unwrap_or(json!({}));
+        if !status.is_success() { return Err(helix_err(status, &v, "Could not read your chat settings")); }
+        let d = v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()).cloned()
+            .unwrap_or(json!({}));
+        Ok(json!({
+            "emote_mode":             d.get("emote_mode").cloned().unwrap_or(json!(false)),
+            "subscriber_mode":        d.get("subscriber_mode").cloned().unwrap_or(json!(false)),
+            "follower_mode":          d.get("follower_mode").cloned().unwrap_or(json!(false)),
+            "follower_mode_duration": d.get("follower_mode_duration").cloned().unwrap_or(json!(0)),
+            "slow_mode":              d.get("slow_mode").cloned().unwrap_or(json!(false)),
+            "slow_mode_wait_time":    d.get("slow_mode_wait_time").cloned().unwrap_or(json!(0)),
+            "unique_chat_mode":       d.get("unique_chat_mode").cloned().unwrap_or(json!(false)),
+        }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// Sets ONE mode. Twitch's PATCH only touches fields present in the body, so
+// sending a single field cannot disturb the others — which is why this takes a
+// mode name rather than a whole settings object.
+//
+// mode: "emote" | "subscriber" | "follower" | "slow" | "unique"
+// minutes is only read for "follower" (0 = anyone who follows at all).
+#[tauri::command]
+pub async fn twitch_set_chat_mode(
+    app: tauri::AppHandle,
+    mode: String,
+    enabled: bool,
+    minutes: Option<u32>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut body = serde_json::Map::new();
+        match mode.as_str() {
+            "emote"      => { body.insert("emote_mode".into(), json!(enabled)); }
+            "subscriber" => { body.insert("subscriber_mode".into(), json!(enabled)); }
+            "unique"     => { body.insert("unique_chat_mode".into(), json!(enabled)); }
+            "follower"   => {
+                body.insert("follower_mode".into(), json!(enabled));
+                if enabled {
+                    // Twitch takes 0..129600 minutes (90 days).
+                    body.insert("follower_mode_duration".into(), json!(minutes.unwrap_or(0).min(129_600)));
+                }
+            }
+            "slow"       => {
+                body.insert("slow_mode".into(), json!(enabled));
+                if enabled {
+                    // Seconds here, not minutes: 3..120.
+                    body.insert("slow_mode_wait_time".into(), json!(minutes.unwrap_or(30).clamp(3, 120)));
+                }
+            }
+            _ => return Err(format!("Unknown chat mode \"{}\".", mode)),
+        }
+
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.patch("https://api.twitch.tv/helix/chat/settings")
+            .query(&[("broadcaster_id", uid.as_str()), ("moderator_id", uid.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .json(&Value::Object(body))
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        if !status.is_success() {
+            let v: Value = r.json().unwrap_or(json!({}));
+            return Err(helix_err(status, &v, "Could not change that chat setting"));
+        }
+        Ok(())
     }).await.map_err(|e| e.to_string())?
 }

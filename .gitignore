@@ -21,6 +21,7 @@ PATCH_NOTES.md
 CHANGELOG-post*.md
 
 # Working notes for the build currently on the bench (+ archived sessions)
+SPARK-backlog-combined.md
 Current_Build.txt
 Current_Build_ARCHIVE*.txt
 TEST_CHECKLIST.txt

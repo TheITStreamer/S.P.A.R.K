@@ -1,6 +1,7 @@
 import { store, toolBlocked } from './store.js';
 import { $, esc, renderOverlayBar } from './utils.js';
 import { playSound as playAudioFile } from './audio.js';
+import { fontOptionsHtml } from './fonts.js';
 
 const { invoke } = window.__TAURI__.core;
 const dialog = window.__TAURI__.dialog;
@@ -225,7 +226,7 @@ function buildFirstSection(){
       <div><label>Border/Ring</label><input id="ciFirstBorder" type="color" value="${firstClaim.borderColor||'#ffc83d'}" style="width:50px;height:32px;border:none;background:none;cursor:pointer"></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:10px">
-      <div><label>Font</label><input id="ciFirstFont" type="text" value="${esc(firstClaim.font||'Segoe UI')}"></div>
+      <div><label>Font</label><select id="ciFirstFont">${fontOptionsHtml(firstClaim.font||'Segoe UI')}</select></div>
       <div><label>Font size (px)</label><input id="ciFirstFs" type="number" value="${firstClaim.fontSize||15}" min="10" max="40"></div>
       <div><label>Width (px)</label><input id="ciFirstW" type="number" value="${firstClaim.width||320}" min="200" max="800"></div>
       <div><label>Height (px)<br><span style="font-size:.7rem;color:var(--muted)">0 = auto</span></label><input id="ciFirstH" type="number" value="${firstClaim.height||0}" min="0" max="300"></div>
@@ -354,7 +355,7 @@ function openEditor(cfg){
         +'<div><label>Border</label><input id="ciEdBorder" type="color" value="'+(cfg.borderColor||'#ffc83d')+'" style="width:50px;height:32px;border:none;background:none;cursor:pointer"></div>'
       +'</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:10px">'
-        +'<div><label>Font</label><input id="ciEdFont" type="text" value="'+esc(cfg.font||'Segoe UI')+'"></div>'
+        +'<div><label>Font</label><select id="ciEdFont">'+fontOptionsHtml(cfg.font||'Segoe UI')+'</select></div>'
         +'<div><label>Font size (px)</label><input id="ciEdFs" type="number" value="'+(cfg.fontSize||15)+'" min="10" max="40"></div>'
         +'<div><label>Width (px)</label><input id="ciEdW" type="number" value="'+(cfg.width||320)+'" min="200" max="800"></div>'
         +'<div><label>Height (px)</label><input id="ciEdH" type="number" value="'+(cfg.height||90)+'" min="60" max="300"></div>'
@@ -460,5 +461,21 @@ export async function initCheckins(){
   if(store.twitch.connected) loadRewardsIntoSelects();
   window.addEventListener('spark-twitch-status', e=>{
     if(e.detail?.connected) loadRewardsIntoSelects();
+  });
+
+  // A new stream clears "already checked in" and the first claim. This fires
+  // only for a genuinely new stream — app.js swallows the online event when it
+  // follows a recent offline, so a dropped connection mid-broadcast does not
+  // let the whole channel check in a second time.
+  //
+  // Lifetime totals are untouched; only the per-stream state resets.
+  window.addEventListener('spark-stream-start', ()=>{
+    checkedInThisStream={};
+    firstClaimedThisStream=false;
+    firstClaim.winner=null;
+    // Same clear the manual "Clear first claim" button performs, so the overlay
+    // drops the previous winner's block rather than leaving it on screen.
+    invoke('checkins_overlay_event',{event:{type:'first_clear'}});
+    updateFirstPreview();
   });
 }

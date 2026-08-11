@@ -1,5 +1,6 @@
 import { store } from './store.js';
 import { $, esc } from './utils.js';
+import { fontOptionsHtml } from './fonts.js';
 
 const { invoke } = window.__TAURI__.core;
 
@@ -21,10 +22,7 @@ function widgetUrl(id) { return overlayBase() + '/diy?id=' + encodeURIComponent(
 const rid = () => 'wgt_' + Math.random().toString(36).slice(2, 9);
 const fileName = (p) => String(p).split(/[\\/]/).pop();
 
-// ── Popular Google Fonts ───────────────────────────────────────────────────────
-const FONTS = ['System default', 'Nunito', 'Poppins', 'Montserrat', 'Roboto', 'Oswald',
-  'Bebas Neue', 'Orbitron', 'Rajdhani', 'Fredoka', 'Baloo 2', 'Quicksand',
-  'Press Start 2P', 'Comfortaa', 'Righteous', 'Luckiest Guy', 'Pacifico'];
+// Font list now shared app-wide — see fonts.js.
 
 // ── Built-in widget types + their starting CSS (users edit this) ────────────────
 const TYPES = {
@@ -379,7 +377,7 @@ function renderEditor(root) {
   const w = widgets().find((x) => x.id === editingId);
   if (!w) { editingId = null; renderList(root); return; }
 
-  const fontOpts = FONTS.map((f) => '<option value="' + esc(f) + '"' + (f === w.font ? ' selected' : '') + '>' + esc(f) + '</option>').join('');
+  const fontOpts = "<option value='System default'" + (w.font === 'System default' ? ' selected' : '') + ">System default</option>" + fontOptionsHtml(w.font);
   const ev = w.events || (w.events = { follow: true, sub: true, cheer: true, raid: true });
   const mode = w.mode || 'css';
   // Style always exists — CSS mode uses it too (maxMsg / hideAfter / scroll).
