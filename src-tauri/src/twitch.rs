@@ -27,7 +27,9 @@ const SCOPES: &str = concat!(
     // Ads and chat modes, also Broadcast tab.
     // channel:read:ads (above) reads the schedule; these two ACT on it.
     "channel:edit:commercial channel:manage:ads ",
-    "moderator:read:chat_settings moderator:manage:chat_settings"
+    "moderator:read:chat_settings moderator:manage:chat_settings ",
+    // Hype train overlay (a D.I.Y widget type).
+    "channel:read:hype_train"
 );
 
 // Scopes for an optional bot account. Deliberately minimal: the bot only ever
@@ -641,6 +643,13 @@ fn run_eventsub(app: &tauri::AppHandle, stop: std::sync::Arc<std::sync::atomic::
                             // guessing from when the app happened to launch.
                             let _ = subscribe(access, client_id, &sid, "stream.online",  "1", json!({"broadcaster_user_id":uid}));
                             let _ = subscribe(access, client_id, &sid, "stream.offline", "1", json!({"broadcaster_user_id":uid}));
+                            // !! HYPE TRAIN IS VERSION 2. !!
+                            // v1 was withdrawn on 15 Jan 2026 and now 410s.
+                            // Every other subscription here is "1", so copying
+                            // the pattern would silently never fire.
+                            let _ = subscribe(access, client_id, &sid, "channel.hype_train.begin",    "2", json!({"broadcaster_user_id":uid}));
+                            let _ = subscribe(access, client_id, &sid, "channel.hype_train.progress", "2", json!({"broadcaster_user_id":uid}));
+                            let _ = subscribe(access, client_id, &sid, "channel.hype_train.end",      "2", json!({"broadcaster_user_id":uid}));
                         }
                         "session_reconnect" => {
                             reconnect_url = v["payload"]["session"]["reconnect_url"].as_str().map(|s| s.to_string());
@@ -734,6 +743,25 @@ fn run_eventsub(app: &tauri::AppHandle, stop: std::sync::Arc<std::sync::atomic::
                                     "is_automatic": ev["is_automatic"],
                                     "started_at": ev["started_at"],
                                 }));
+                            }
+                            // Hype train. The whole payload is forwarded untouched so
+                            // the widget can use any field Twitch sends, including
+                            // ones added later, with no Rust change needed.
+                            if sub_type.starts_with("channel.hype_train.") {
+                                let phase = sub_type.rsplit('.').next().unwrap_or("");
+                                let mut payload = ev.clone();
+                                payload["_phase"] = json!(phase);   // begin | progress | end
+                                let _ = app.emit("twitch-hypetrain", payload.clone());
+                                // Straight onto the overlay bus too, so a D.I.Y
+                                // widget gets it without a round-trip through the
+                                // app window. "chat" is the tool the D.I.Y runtime
+                                // long-polls, not a description of the content.
+                                {
+                                    let shared = app.state::<Shared>();
+                                    let mut oe = payload;
+                                    oe["type"] = json!("hypetrain");
+                                    shared.push_overlay_event("chat", oe);
+                                }
                             }
                             // Stream went live / ended. The cached stream info is
                             // cleared as well as forwarded: anything asking "am I
@@ -2396,5 +2424,35 @@ pub async fn twitch_set_chat_mode(
             return Err(helix_err(status, &v, "Could not change that chat setting"));
         }
         Ok(())
+    }).await.map_err(|e| e.to_string())?
+}
+
+// ── Hype train ────────────────────────────────────────────────────────────────
+// Live updates arrive as EventSub v2 (see the subscribe block above). This is
+// the catch-up call: open SPARK part way through a train and the overlay would
+// otherwise show nothing until the next one, which — given how rare they are —
+// could be weeks.
+//
+// Replaces the old Get Hype Train EVENTS endpoint, which was withdrawn in
+// January 2026 and now returns 410. This is Get Hype Train STATUS.
+#[tauri::command]
+pub async fn twitch_get_hype_train(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let shared = app.state::<Shared>();
+        let (access, client_id) = ensure_token(&shared)?;
+        let (uid, _) = identity(&shared, &access)?;
+        let c = reqwest::blocking::Client::new();
+        let r = c.get("https://api.twitch.tv/helix/hypetrain/status")
+            .query(&[("broadcaster_id", uid.as_str())])
+            .header("Authorization", format!("Bearer {}", access))
+            .header("Client-Id", &client_id)
+            .send().map_err(|e| e.to_string())?;
+        let status = r.status();
+        // No scope yet (not reconnected), or no train — either way there is
+        // nothing to show and it is not worth an error on screen.
+        if !status.is_success() { return Ok(Value::Null); }
+        let v: Value = r.json().unwrap_or(json!({}));
+        Ok(v.get("data").and_then(|d| d.as_array()).and_then(|a| a.first()).cloned()
+            .unwrap_or(Value::Null))
     }).await.map_err(|e| e.to_string())?
 }

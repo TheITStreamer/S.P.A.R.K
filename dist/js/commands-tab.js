@@ -47,6 +47,7 @@ const ACTION_TYPES = [
   { v:'audio',    l:'Play a sound' },
   { v:'tool',     l:'Trigger a SPARK tool' },
   { v:'popup',    l:'Show on overlay' },
+  { v:'keypress', l:'Press a key' },
   { v:'wait',     l:'Wait' },
 ];
 
@@ -286,6 +287,7 @@ function buildAction(type){
   if(type === 'audio')    return { type:'audio', path:'', volume:100 };
   if(type === 'tool')     return { type:'tool', tool:'wheel', action:'spin', target:'', amount:1 };
   if(type === 'wait')     return { type:'wait', seconds: 1 };
+  if(type === 'keypress') return { type:'keypress', combo:'' };
   if(type === 'popup')    return {
     type:'popup', text:'',
     textEffect:'none', effectSpeed:40,   // ms per character / word / letter
@@ -921,6 +923,10 @@ async function runActions(cmd, ctx){
         // Capped so a mistyped value can't leave a command hanging forever.
         const secs = Math.max(0, Math.min(300, Number(a.seconds) || 0));
         if(secs > 0) await sleep(secs * 1000);
+      } else if(a.type === 'keypress'){
+        // Fire and forget: a failed keypress must not stop the rest of the
+        // command, the same as every other action here.
+        if(a.combo) invoke('send_keypress', { combo: a.combo }).catch(()=>{});
       } else if(a.type === 'tool'){
         runToolAction(a, ctx);
       } else if(a.type === 'popup'){
@@ -1457,7 +1463,7 @@ function renderList(){
     const rows = commands.map((c,i)=>({c,i})).filter(({c}) => !q || (c.name||'').toLowerCase().includes(q));
     host.innerHTML = rows.length
       ? rows.map(({c,i}) => {
-          const KIND_LABEL = { audio:'sound', announce:'announcement', chat:'chat', tool:'tool', popup:'overlay' };
+          const KIND_LABEL = { audio:'sound', announce:'announcement', chat:'chat', tool:'tool', popup:'overlay', keypress:'keypress' };
           const kinds = (c.actions||[]).map(a => KIND_LABEL[a.type] || a.type);
           const uniq = [...new Set(kinds)];
           const perm = PERMS.find(p => p.v === c.permission);
@@ -1573,6 +1579,7 @@ function actionSummary(a){
     return t ? (t.length > n ? t.slice(0,n-1) + '…' : t) : '';
   };
   if(a.type === 'wait')  return `${a.seconds == null ? 1 : a.seconds}s`;
+  if(a.type === 'keypress') return a.combo ? a.combo : 'no key set';
   if(a.type === 'audio') return a.path ? a.path.split(/[\\/]/).pop() : 'no file chosen';
   if(a.type === 'tool'){
     const def = TOOL_ACTIONS[a.tool];
@@ -1627,6 +1634,16 @@ function actionHtml(a, i){
         <label style="margin:0">seconds, then carry on</label>
       </div>
       <div class="hint">Only this run waits. Another command — or the same one from someone else — carries on as normal.</div>`;
+  }
+  else if(a.type === 'keypress'){
+    body = `<label class="mt">Key combination</label>
+      <div class="row" style="gap:6px">
+        <input type="text" data-act="keycombo" data-i="${i}" value="${esc(a.combo||'')}" placeholder="e.g. ctrl+shift+F13" style="flex:1">
+        <button class="btn-sm" data-act="keytest" data-i="${i}">Test</button>
+      </div>
+      <div class="hint">Modifiers are <code>ctrl</code>, <code>shift</code>, <code>alt</code> and <code>win</code>, joined with <code>+</code>. The last part is the key: a single letter or number, a named key such as <code>space</code>, <code>enter</code>, <code>tab</code>, <code>esc</code> or an arrow, or <code>F1</code> to <code>F24</code>.</div>
+      <div class="hint"><strong>F13 to F24 are the safe choice.</strong> No physical keyboard has them, so nothing else on your PC will react by accident. Most software will happily bind them.</div>
+      <div class="warn" style="display:block">The keypress goes to whichever window is focused at that moment. SPARK cannot aim it at a particular program, so if you are typing in chat when it fires, your chat gets it.</div>`;
   }
   else if(a.type === 'tool'){
     const def = TOOL_ACTIONS[a.tool] || TOOL_ACTIONS.wheel;
@@ -1986,6 +2003,13 @@ function wireCommandEditor(c){
       renderCommandEditor(c);
     }
     else if(act === 'del'){ collapsed.delete(a.aid); c.actions.splice(i,1); persist(); renderCommandEditor(c); renderList(); }
+    else if(act === 'keytest'){
+      // Fires the real thing. Worth knowing it lands on whatever window has
+      // focus — which, when you click Test, is SPARK.
+      invoke('send_keypress', { combo: a.combo || '' })
+        .then(()=>flash(el, 'Sent'))
+        .catch(e=>{ alert(String(e)); });
+    }
     else if(act === 'up' && i > 0){ c.actions.splice(i-1,0,c.actions.splice(i,1)[0]); persist(); renderCommandEditor(c); }
     else if(act === 'down' && i < c.actions.length-1){ c.actions.splice(i+1,0,c.actions.splice(i,1)[0]); persist(); renderCommandEditor(c); }
     else if(act === 'pick'){
@@ -2041,6 +2065,7 @@ function wireCommandEditor(c){
       persist(); renderCommandEditor(c); renderList();
     }
     else if(act === 'toolaction'){ a.action = el.value; persist(); renderCommandEditor(c); }
+    else if(act === 'keycombo'){ a.combo = el.value; persist(); renderList(); }
     else if(act === 'tooltarget'){ a.target = el.value; persist(); }
     // ── Popup ──
     else if(act === 'popposition'){ a.position = el.value; persist(); }

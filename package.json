@@ -1,6 +1,6 @@
 {
   "name": "spark",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "S.P.A.R.K. - Streaming Panel for Alerts, Redeems and Key tools",
   "private": true,
   "scripts": {

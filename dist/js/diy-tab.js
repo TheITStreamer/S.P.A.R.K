@@ -1,5 +1,5 @@
 import { store } from './store.js';
-import { $, esc } from './utils.js';
+import { $, esc, flash } from './utils.js';
 import { fontOptionsHtml } from './fonts.js';
 
 const { invoke } = window.__TAURI__.core;
@@ -51,6 +51,46 @@ const TYPES = {
 }
 .emote { height: 1.4em; vertical-align: middle; }  /* Twitch emotes */
 @keyframes msgin { from { opacity: 0; transform: translateY(12px); } }
+`,
+  },
+  hypetrain: {
+    name: 'Hype Train',
+    font: 'Nunito',
+    css:
+`/* Hype train. Everything below is yours to change.
+   SPARK adds classes you can style against:
+     .hypetrain.show     visible
+     .hypetrain.levelup  briefly, when a new level is reached
+     .hypetrain.end      the summary after it finishes
+                                                                            */
+#spark-hypetrain {
+  display: none;
+  width: 300px;
+  padding: 12px 14px;
+  box-sizing: border-box;
+  background: rgba(20,12,40,.92);
+  border: 1px solid #ffc83d;
+  border-radius: 12px;
+  color: #f5f1ff;
+  animation: htin .35s ease both;
+}
+#spark-hypetrain.show { display: block; }
+
+.ht-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.ht-label { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: #ffc83d; font-weight: 700; }
+.ht-time { margin-left: auto; font-size: 12px; color: #a79fc7; }
+.ht-level { font-size: 19px; font-weight: 700; }
+.ht-bar { height: 9px; border-radius: 5px; background: rgba(255,255,255,.12); overflow: hidden; margin: 7px 0 5px; }
+.ht-fill { height: 100%; background: #ffc83d; border-radius: 5px; transition: width .4s ease; }
+.ht-progress { font-size: 12px; color: #a79fc7; }
+.ht-top { font-size: 12px; color: #a79fc7; margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.1); }
+.ht-top-name { color: #f5f1ff; font-weight: 700; }
+
+#spark-hypetrain.levelup { animation: htpop .5s ease; }
+#spark-hypetrain.end { opacity: .85; }
+
+@keyframes htin  { from { opacity: 0; transform: translateY(10px); } }
+@keyframes htpop { 50% { transform: scale(1.06); } }
 `,
   },
   alert: {
@@ -233,6 +273,98 @@ let editingId = null;
 let previewTimer = null;
 let nameTimer = null;
 
+
+// ── Starting looks ────────────────────────────────────────────────────────────
+// Each widget type ships a few ready-made styles. The CSS editor underneath is
+// still the real control — a preset just replaces what is in it, which is why
+// the preset handler asks first when the CSS has been edited.
+//
+// Keyed by type so a preset can never be applied to the wrong widget.
+const CSS_PRESETS = {
+  chat: [
+    { name: 'Default', css: null },   // null = that type's base CSS in TYPES
+    { name: 'Minimal', css:
+`/* Chat — no bubbles, just names and text. */
+#spark-chat { display:flex; flex-direction:column; justify-content:flex-end; gap:4px; padding:16px; height:100vh; box-sizing:border-box; }
+.msg { animation: msgin .25s ease both; }
+.msg-name { font-weight:800; font-size:17px; margin-right:6px; color:#ffc83d; }
+.msg-text { color:#fff; font-size:16px; text-shadow:0 2px 6px rgba(0,0,0,.9); }
+.emote { height:1.4em; vertical-align:middle; }
+@keyframes msgin { from { opacity:0; } }
+` },
+    { name: 'Card', css:
+`/* Chat — each message on its own solid card. */
+#spark-chat { display:flex; flex-direction:column; justify-content:flex-end; gap:8px; padding:16px; height:100vh; box-sizing:border-box; }
+.msg { background:#1b1530; border-left:3px solid #ffc83d; border-radius:8px; padding:8px 12px; animation: msgin .3s ease both; }
+.msg-name { display:block; font-weight:800; font-size:13px; color:#ffc83d; letter-spacing:.06em; text-transform:uppercase; }
+.msg-text { color:#f5f1ff; font-size:16px; }
+.emote { height:1.4em; vertical-align:middle; }
+@keyframes msgin { from { opacity:0; transform:translateX(-14px); } }
+` },
+  ],
+  alert: [
+    { name: 'Default', css: null },
+    { name: 'Bar', css:
+`/* Alert — a full-width band rather than a box. */
+#spark-alert { display:none; width:100vw; padding:18px 0; text-align:center; background:linear-gradient(90deg,rgba(255,200,61,0),rgba(255,200,61,.25),rgba(255,200,61,0)); animation: albar .4s ease both; }
+#spark-alert.show { display:block; }
+.alert-title { font-size:15px; letter-spacing:.28em; text-transform:uppercase; color:#ffc83d; font-weight:800; }
+.alert-name { font-size:34px; font-weight:800; color:#fff; text-shadow:0 3px 12px rgba(0,0,0,.8); }
+@keyframes albar { from { opacity:0; transform:scaleX(.9); } }
+` },
+  ],
+  hypetrain: [
+    { name: 'Default', css: null },
+    { name: 'Bar only', css:
+`/* Hype train — just a bar and a level, nothing else. */
+#spark-hypetrain { display:none; width:340px; }
+#spark-hypetrain.show { display:block; }
+.ht-head { display:flex; align-items:center; gap:8px; }
+.ht-label { display:none; }
+.ht-time { margin-left:auto; font-size:13px; color:#fff; text-shadow:0 2px 6px #000; }
+.ht-level { font-size:15px; font-weight:800; color:#ffc83d; text-shadow:0 2px 6px #000; letter-spacing:.1em; text-transform:uppercase; }
+.ht-bar { height:14px; border-radius:7px; background:rgba(0,0,0,.55); overflow:hidden; margin:6px 0 0; }
+.ht-fill { height:100%; background:#ffc83d; border-radius:7px; transition:width .4s ease; }
+.ht-progress, .ht-top { display:none; }
+` },
+    { name: 'Big and loud', css:
+`/* Hype train — large, centred, made to be noticed. */
+#spark-hypetrain { display:none; width:460px; padding:20px 24px; text-align:center; background:rgba(10,6,22,.9); border:2px solid #ffc83d; border-radius:18px; color:#fff; }
+#spark-hypetrain.show { display:block; animation: htin .4s ease both; }
+.ht-label { font-size:13px; letter-spacing:.3em; text-transform:uppercase; color:#ffc83d; font-weight:800; }
+.ht-time { display:block; font-size:13px; color:#a79fc7; margin-top:2px; }
+.ht-head { display:block; }
+.ht-level { font-size:40px; font-weight:900; color:#ffc83d; line-height:1.1; margin:6px 0; }
+.ht-bar { height:16px; border-radius:8px; background:rgba(255,255,255,.12); overflow:hidden; }
+.ht-fill { height:100%; background:linear-gradient(90deg,#ffc83d,#ff9f43); transition:width .4s ease; }
+.ht-progress { font-size:14px; color:#a79fc7; margin-top:6px; }
+.ht-top { font-size:14px; margin-top:8px; }
+.ht-top-name { color:#ffc83d; font-weight:800; }
+#spark-hypetrain.levelup { animation: htpop .55s ease; }
+@keyframes htin  { from { opacity:0; transform:translateY(16px) scale(.96); } }
+@keyframes htpop { 50% { transform:scale(1.08); } }
+` },
+  ],
+};
+
+// The CSS a preset called "Default" means, per type.
+function baseCss(type){ return (TYPES[type] || TYPES.chat).css; }
+
+function presetCssFor(type, name){
+  const list = CSS_PRESETS[type] || [];
+  const p = list.find(x => x.name === name);
+  if (!p) return null;
+  return p.css == null ? baseCss(type) : p.css;
+}
+
+// True when the widget's CSS is not any of its presets — i.e. hand-edited, and
+// worth asking about before a preset overwrites it.
+function cssIsCustom(w){
+  const list = CSS_PRESETS[w.type] || [];
+  const cur = String(w.css || '').trim();
+  return !list.some(p => String(p.css == null ? baseCss(w.type) : p.css).trim() === cur);
+}
+
 function addWidget(type) {
   const t = TYPES[type] || TYPES.chat;
   const existing = widgets().filter((w) => w.type === type).length;
@@ -246,7 +378,12 @@ function addWidget(type) {
     alertText: JSON.parse(JSON.stringify(DEFAULT_ALERTTEXT)),
     chatEventText: JSON.parse(JSON.stringify(DEFAULT_CHATEVENTTEXT)),
     eventStyle, showEvents: false,
-    mode: 'designer', style, styleCss: generateStyleCss(type, style, eventStyle) };
+    showTop: false,
+    // The visual designer builds CSS from chat/alert-shaped options, so the
+    // hype train widget starts straight in the CSS editor. Presets give it the
+    // ready-made looks instead.
+    mode: type === 'hypetrain' ? 'css' : 'designer',
+    style, styleCss: generateStyleCss(type, style, eventStyle) };
   widgets().push(w);
   persist();
   editingId = w.id;
@@ -254,7 +391,9 @@ function addWidget(type) {
 }
 
 // ── Preview ────────────────────────────────────────────────────────────────────
+let lastPreviewId = null;
 function reloadPreview(id) {
+  if (id) lastPreviewId = id;
   const frame = $('diyPreviewFrame');
   const urlBox = $('diyOverlayUrl');
   if (!id) { if (frame) frame.src = 'about:blank'; if (urlBox) urlBox.value = ''; return; }
@@ -285,13 +424,47 @@ function livePreview(w) {
     frame.contentWindow.postMessage({
       sparkCss: css, sparkOutMs: outMs,
       sparkAlertText: w.alertText, sparkChatEventText: w.chatEventText, sparkRoleStyle: w.roleStyle,
+      sparkShowTop: !!w.showTop,
     }, '*');
   } catch (e) {}
 }
 
 // Fire a real test event onto SPARK's overlay bus so it shows up in the preview
 // AND on any live OBS browser source — the only way to try alerts on demand.
+// Runs a short but complete hype train on the bus: starts, climbs, levels up,
+// finishes. Goes to the live OBS source as well as the preview, which is the
+// only way to check placement without waiting for a real one.
+let htTestTimer = null;
+function fireHypeTrainTest() {
+  clearInterval(htTestTimer);
+  let level = 1, total = 0;
+  const goalFor = (l) => 1600 + (l - 1) * 1400;
+
+  const send = (phase) => {
+    invoke('chat_overlay_alert', { event: {
+      type: 'hypetrain', _phase: phase,
+      level, total, goal: goalFor(level),
+      expires_at: new Date(Date.now() + 60000).toISOString(),
+      top_contributions: [{ user_name: 'TestViewer', type: 'subscription', total: 1500 }],
+    } }).catch(() => {});
+  };
+
+  send('begin');
+  htTestTimer = setInterval(() => {
+    total += 700;
+    if (total >= goalFor(level)) {
+      if (level >= 3) { clearInterval(htTestTimer); send('end'); return; }
+      level++; total = 0;
+    }
+    send('progress');
+  }, 900);
+}
+
 function fireTest(w, kind) {
+  if (w.type === 'hypetrain') {
+    fireHypeTrainTest();
+    return;
+  }
   if (w.type === 'alert') {
     const ev = { type: 'alert', kind: kind };
     if (kind === 'sub') ev.name = 'TestSubscriber';
@@ -324,6 +497,7 @@ function renderList(root) {
     + '<div style="display:flex;gap:6px">'
     + '<button class="btn-sm" data-add="chat">+ Chat widget</button>'
     + '<button class="btn-sm" data-add="alert">+ Alert widget</button>'
+    + '<button class="btn-sm" data-add="hypetrain">+ Hype train widget</button>'
     + '</div></div>';
 
   if (!list.length) {
@@ -342,6 +516,7 @@ function renderList(root) {
         + '</div>'
         + '<div style="display:flex;gap:6px">'
         + '<button class="btn-sm" data-edit="' + esc(w.id) + '">Edit style</button>'
+        + '<button class="btn-sm" data-prev="' + esc(w.id) + '">Preview</button>'
         + '<button class="btn-sm" data-dup="' + esc(w.id) + '">Duplicate</button>'
         + '<button class="btn-sm" data-del="' + esc(w.id) + '" style="margin-left:auto">Delete</button>'
         + '</div>'
@@ -353,6 +528,12 @@ function renderList(root) {
   root.querySelectorAll('[data-add]').forEach((el) => el.addEventListener('click', (e) => addWidget(e.target.dataset.add)));
   root.querySelectorAll('[data-copy]').forEach((el) => el.addEventListener('click', (e) => navigator.clipboard?.writeText(widgetUrl(e.target.dataset.copy)).catch(() => {})));
   root.querySelectorAll('[data-edit]').forEach((el) => el.addEventListener('click', (e) => { editingId = e.target.dataset.edit; render(); }));
+  // Show a widget in the preview without opening its editor — with three types
+  // now, there is no sensible "default" one to show.
+  root.querySelectorAll('[data-prev]').forEach((el) => el.addEventListener('click', (e) => {
+    reloadPreview(e.target.dataset.prev);
+    flash(e.target, 'Showing');
+  }));
   root.querySelectorAll('[data-dup]').forEach((el) => el.addEventListener('click', (e) => {
     const src = widgets().find((x) => x.id === e.target.dataset.dup);
     if (!src) return;
@@ -368,8 +549,13 @@ function renderList(root) {
     if (i >= 0) { widgets().splice(i, 1); persist(); reloadPreview(null); render(); }
   }));
 
-  // Show the first widget in the preview by default.
-  if (list.length) reloadPreview(list[0].id);
+  // Preview whatever you last had open, falling back to the first widget.
+  // Previewing list[0] unconditionally meant coming back from editing a hype
+  // train showed you a chat widget instead — fine when there were two types,
+  // confusing now.
+  const stillThere = lastPreviewId && list.some((x) => x.id === lastPreviewId);
+  if (stillThere) reloadPreview(lastPreviewId);
+  else if (list.length) reloadPreview(list[0].id);
   else reloadPreview(null);
 }
 
@@ -431,14 +617,28 @@ function renderEditor(root) {
     + chatDesignerExtras
     + '<button class="btn-sm" id="diyCopyCss" style="margin-top:12px">Copy my design as CSS</button>';
 
+  const presetList = CSS_PRESETS[w.type] || [];
+  const presetPanel = !presetList.length ? '' :
+      '<label style="font-size:.8rem;color:var(--muted)">Starting looks</label>'
+    + '<div class="row" style="gap:6px;flex-wrap:wrap;margin:4px 0 12px">'
+    + presetList.map(pz =>
+        '<button class="btn-sm btn-ghost" data-preset="' + esc(pz.name) + '">' + esc(pz.name) + '</button>').join('')
+    + '</div>';
+
   const cssPanel =
-      '<label style="font-size:.8rem;color:var(--muted)">CSS. Edit it and the preview updates as you type</label>'
+      presetPanel
+    + '<label style="font-size:.8rem;color:var(--muted)">CSS. Edit it and the preview updates as you type</label>'
     + '<textarea id="diyCss" spellcheck="false" style="width:100%;height:320px;margin-top:4px;font-family:ui-monospace,Consolas,monospace;font-size:.8rem;line-height:1.45;white-space:pre;tab-size:2">' + esc(w.css) + '</textarea>'
     + '<p style="font-size:.72rem;color:var(--muted);margin:8px 0 0">Style hooks: '
     + (w.type === 'chat'
         ? '<code>#spark-chat</code>, <code>.msg</code>, <code>.msg-name</code>, <code>.msg-text</code>. Per chatter level: <code>.msg.role-broadcaster</code>, <code>.role-mod</code>, <code>.role-vip</code>, <code>.role-sub</code>, <code>.role-follower</code>, <code>.role-viewer</code>. In-chat events: <code>.chat-event</code>.'
         : '<code>#spark-alert</code>, <code>.alert.show</code>, <code>.alert-title</code>, <code>.alert-name</code> (subs add <code>.alert-sub</code>)')
     + '</p>'
+    + (w.type === 'hypetrain'
+        ? '<div style="border-top:1px dashed var(--line);margin:10px 0 4px;padding-top:8px;font-size:.78rem;color:var(--muted)">Hype train</div>'
+          + '<label class="checkrow" style="margin:8px 0"><input type="checkbox" id="diyShowTop"' + (w.showTop ? ' checked' : '') + '> Show the top contributor\'s name</label>'
+          + '<div class="hint" style="margin:0 0 8px">Off by default — not everyone wants their name on stream. The bar, level and countdown show either way.</div>'
+        : '')
     + (w.type === 'chat'
         ? '<div style="border-top:1px dashed var(--line);margin:10px 0 4px;padding-top:8px;font-size:.78rem;color:var(--muted)">Chat behaviour</div>'
           + cRange('maxMsg', 'Max messages kept', 3, 60)
@@ -531,16 +731,22 @@ function renderEditor(root) {
           + '<button class="btn-sm" data-test="sub">Test Sub</button>'
           + '<button class="btn-sm" data-test="cheer">Test Bits</button>'
           + '<button class="btn-sm" data-test="raid">Test Raid</button>'
+        : w.type === 'hypetrain'
+        ? '<button class="btn-sm" data-test="normal">Test Hype Train</button>'
         : '<button class="btn-sm" data-test="message">Test Message</button>')
     + '</div>'
     + alertTextHtml
     + chatBehaviourHtml
     + '<div style="border-top:1px solid var(--line);padding-top:10px">'
-    + '<div style="display:flex;gap:6px;margin-bottom:12px">'
-    + '<button class="btn-sm" data-mode="designer"' + activeBtn(mode === 'designer') + '>🎛 Designer</button>'
-    + '<button class="btn-sm" data-mode="css"' + activeBtn(mode === 'css') + '>&lt;/&gt; Custom CSS</button>'
-    + '</div>'
-    + (mode === 'designer' ? designerPanel : cssPanel)
+    // The visual Designer builds CSS from chat/alert-shaped options and knows
+    // nothing about a hype train, so offering it there would hand you chat
+    // styling for a progress bar. Presets + CSS are that type's controls.
+    + (w.type === 'hypetrain' ? '' :
+        '<div style="display:flex;gap:6px;margin-bottom:12px">'
+      + '<button class="btn-sm" data-mode="designer"' + activeBtn(mode === 'designer') + '>🎛 Designer</button>'
+      + '<button class="btn-sm" data-mode="css"' + activeBtn(mode === 'css') + '>&lt;/&gt; Custom CSS</button>'
+      + '</div>')
+    + (mode === 'designer' && w.type !== 'hypetrain' ? designerPanel : cssPanel)
     + '</div>'
     + '</div>';
 
@@ -668,6 +874,32 @@ function renderEditor(root) {
 
   // Show-events toggle (reload — changes the runtime and reveals event controls)
   $('diyShowEvents')?.addEventListener('change', async (e) => { w.showEvents = e.target.checked; await persist(); pushObsRefresh(w.id); render(); });
+
+  // Hype train: name the top contributor, or don't.
+  $('diyShowTop')?.addEventListener('change', async (e) => {
+    w.showTop = e.target.checked;
+    await persist();
+    // The live preview picks it up without a reload; the OBS source needs one.
+    livePreview(w);   // preview updates instantly; OBS needs the refresh below
+    pushObsRefresh(w.id);
+  });
+
+  // Starting looks. Replacing hand-edited CSS asks first — one stray click
+  // would otherwise throw away an evening's work with no undo.
+  root.querySelectorAll('[data-preset]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const name = btn.dataset.preset;
+      const css = presetCssFor(w.type, name);
+      if (css == null) return;
+      if (String(css).trim() === String(w.css || '').trim()) return;  // already on it
+      if (cssIsCustom(w) && !confirm('Replace your CSS with the "' + name + '" look?\n\nYour current CSS will be lost.')) return;
+      w.css = css;
+      w.mode = 'css';
+      await persist();
+      render();
+      pushObsRefresh(w.id);
+    });
+  });
 
   // In-chat event text (live)
   root.querySelectorAll('[data-cet]').forEach((el) => el.addEventListener('input', (e) => {

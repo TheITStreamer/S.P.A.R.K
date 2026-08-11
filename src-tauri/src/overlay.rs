@@ -60,21 +60,33 @@ pub fn start_server(app: tauri::AppHandle) {
     });
 }
 
+// Overlay pages. OBS loads these as a browser source by navigating to them,
+// which is not a cross-origin fetch, so no CORS header is needed — and without
+// it another site cannot read your overlay configuration.
 fn html(req: tiny_http::Request, body: &str) {
     let mut r = Response::from_string(body);
     r.add_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
-    r.add_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
     let _ = req.respond(r);
 }
 fn js(req: tiny_http::Request, body: &str) {
     let h = Header::from_bytes(&b"Content-Type"[..], &b"text/javascript; charset=utf-8"[..]).unwrap();
     let _ = req.respond(Response::from_string(body).with_header(h));
 }
+// NO Access-Control-Allow-Origin here, deliberately.
+//
+// This is /events — the live feed of chat messages, viewer names and every
+// tool's state. It used to send "*", which meant ANY WEBSITE open in ANY
+// browser could fetch http://localhost:4747/events and read the response.
+// Browse to a hostile page while SPARK is running and it could quietly siphon
+// your entire chat.
+//
+// The overlays do not need the header: they are SERVED BY THIS SERVER, so
+// their fetch('/events') is same-origin and CORS never applies. Removing it
+// costs nothing and closes the hole.
 fn json_resp(req: tiny_http::Request, body: String) {
     let mut r = Response::from_string(body);
     r.add_header(Header::from_bytes(&b"Content-Type"[..],    &b"application/json"[..]).unwrap());
     r.add_header(Header::from_bytes(&b"Cache-Control"[..],   &b"no-store"[..]).unwrap());
-    r.add_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap());
     let _ = req.respond(r);
 }
 
@@ -82,7 +94,20 @@ fn handle(app: &tauri::AppHandle, request: tiny_http::Request) {
     let url = request.url().to_string();
     let path = url.split('?').next().unwrap_or("/");
 
-    // CORS preflight
+    // CORS preflight.
+    //
+    // The wildcard was removed from /events and from the overlay PAGES — those
+    // are the sensitive ones and neither needs it, because overlays are served
+    // by this same server and are therefore same-origin.
+    //
+    // It remains on:
+    //   /fonts.css and /fonts/<file>  the app window links these from a
+    //                                 different origin, so they genuinely need it
+    //   /diy/sound, /diy/icon,        media the streamer chose; same-origin for
+    //   /commands/image               overlays, and harmless to leave open
+    //
+    // There are no write routes at all, so nothing here can be made to CHANGE
+    // anything — worth keeping that way.
     if request.method() == &tiny_http::Method::Options {
         let mut r = Response::from_string("").with_status_code(204);
         r.add_header(Header::from_bytes("Access-Control-Allow-Origin","*").unwrap());
@@ -266,7 +291,7 @@ const DIY_HOST_TEMPLATE: &str = r#"<!DOCTYPE html>
 </head><body>
 %%SKELETON%%
 %%AUDIO%%
-<script>window.SPARK_WIDGET_ID='%%ID%%';window.SPARK_WIDGET_TYPE='%%TYPE%%';window.SPARK_WIDGET_EVENTS=%%EVENTS%%;window.SPARK_WIDGET_OUTMS=%%OUTMS%%;window.SPARK_WIDGET_SCROLL='%%SCROLL%%';window.SPARK_WIDGET_ICONS=%%ICONS%%;window.SPARK_WIDGET_ALERTTEXT=%%ALERTTEXT%%;window.SPARK_WIDGET_ROLESTYLE=%%ROLESTYLE%%;window.SPARK_WIDGET_IGNORE=%%IGNORE%%;window.SPARK_WIDGET_SHOWEVENTS=%%SHOWEVENTS%%;window.SPARK_WIDGET_CHATEVENTTEXT=%%CHATEVENTTEXT%%;window.SPARK_WIDGET_MAXMSG=%%MAXMSG%%;window.SPARK_WIDGET_HIDEMS=%%HIDEMS%%;window.SPARK_WIDGET_DURMS=%%DURMS%%;</script>
+<script>window.SPARK_WIDGET_ID='%%ID%%';window.SPARK_WIDGET_TYPE='%%TYPE%%';window.SPARK_WIDGET_EVENTS=%%EVENTS%%;window.SPARK_WIDGET_OUTMS=%%OUTMS%%;window.SPARK_WIDGET_SCROLL='%%SCROLL%%';window.SPARK_WIDGET_ICONS=%%ICONS%%;window.SPARK_WIDGET_ALERTTEXT=%%ALERTTEXT%%;window.SPARK_WIDGET_ROLESTYLE=%%ROLESTYLE%%;window.SPARK_WIDGET_IGNORE=%%IGNORE%%;window.SPARK_WIDGET_SHOWEVENTS=%%SHOWEVENTS%%;window.SPARK_WIDGET_SHOWTOP=%%SHOWTOP%%;window.SPARK_WIDGET_CHATEVENTTEXT=%%CHATEVENTTEXT%%;window.SPARK_WIDGET_MAXMSG=%%MAXMSG%%;window.SPARK_WIDGET_HIDEMS=%%HIDEMS%%;window.SPARK_WIDGET_DURMS=%%DURMS%%;</script>
 <script src="/js/diy-runtime.js"></script>
 </body></html>"#;
 
@@ -355,6 +380,9 @@ fn build_diy_page(w: &serde_json::Value, ignore_json: &str, imported_families: &
     // Per-role name colour/glow, in-chat event toggle + text templates.
     let rolestyle_json = script_safe(w.get("roleStyle").cloned().unwrap_or_else(|| serde_json::json!({})).to_string());
     let show_events = w.get("showEvents").and_then(|x| x.as_bool()).unwrap_or(false);
+    // Hype train: name the top contributor, or don't. Off by default — not
+    // everyone wants their name on stream.
+    let show_top = w.get("showTop").and_then(|x| x.as_bool()).unwrap_or(false);
     let chatevent_json = script_safe(w.get("chatEventText").cloned().unwrap_or_else(default_chatevent_text).to_string());
 
     // Chat message limit + timed hide; alert on-screen duration (seconds -> ms).
@@ -377,8 +405,9 @@ fn build_diy_page(w: &serde_json::Value, ignore_json: &str, imported_families: &
 
     // Fixed, SPARK-defined skeleton per widget type.
     let (skeleton, typ_safe) = match typ {
-        "alert" => ("<div id=\"spark-alert\" class=\"alert\"></div>", "alert"),
-        _       => ("<main id=\"spark-chat\"></main>", "chat"),
+        "alert"     => ("<div id=\"spark-alert\" class=\"alert\"></div>", "alert"),
+        "hypetrain" => ("<div id=\"spark-hypetrain\" class=\"hypetrain\"></div>", "hypetrain"),
+        _           => ("<main id=\"spark-chat\"></main>", "chat"),
     };
 
     // Google Font (or a plain system stack).
@@ -422,6 +451,7 @@ fn build_diy_page(w: &serde_json::Value, ignore_json: &str, imported_families: &
         .replace("%%ROLESTYLE%%", &rolestyle_json)
         .replace("%%IGNORE%%",    &script_safe(ignore_json.to_string()))
         .replace("%%SHOWEVENTS%%", if show_events { "true" } else { "false" })
+        .replace("%%SHOWTOP%%", if show_top { "true" } else { "false" })
         .replace("%%CHATEVENTTEXT%%", &chatevent_json)
         .replace("%%MAXMSG%%",    &max_msg.to_string())
         .replace("%%HIDEMS%%",    &hide_ms.to_string())

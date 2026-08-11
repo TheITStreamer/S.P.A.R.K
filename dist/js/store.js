@@ -36,10 +36,30 @@ export function liveSet(key, value){
   store.live[key] = value;
 }
 
+// Feeds {chatters} (a count) and {randomuser} (a pick). Capped because it is
+// the one collection in SPARK that grew without limit: every unique name for as
+// long as the app stays open, which on a long stream or a raid is a lot of
+// entries nobody ever looks at.
+//
+// Dropping the OLDEST when full keeps {randomuser} pointing at people who
+// actually spoke recently, which is what you want it for anyway.
+const MAX_CHATTERS = 5000;
+
 export function noteChatter(login, display){
   const k = String(login||'').trim().toLowerCase();
   if(!k) return;
-  store.live.chatters[k] = display || login;
+  const m = store.live.chatters;
+  // Re-inserting moves a returning chatter to the newest end, so a regular is
+  // never the one evicted.
+  if(m[k] !== undefined) delete m[k];
+  m[k] = display || login;
+
+  if(Object.keys(m).length > MAX_CHATTERS){
+    // Object key order is insertion order for string keys, so the first key is
+    // the oldest.
+    const oldest = Object.keys(m)[0];
+    if(oldest !== undefined) delete m[oldest];
+  }
 }
 
 // ── Global bot/user ignore list (Settings tab owns the UI) ──────────────────

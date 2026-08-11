@@ -1,7 +1,7 @@
 import { store, ignoreList, saveIgnoreList, TOOL_DEFS, toolToggles, toolDefaultMsg, saveToolToggles, MASTER_TOOL_DEFS, masterTools } from './store.js';
 import { refreshDisabledBanner, resetTabOrder } from './tab-chrome.js';
 import { $, esc } from './utils.js';
-import { setHeaderStatus } from './app.js';
+import { setHeaderStatus, checkForUpdate } from './app.js';
 import * as prof from './profiles.js';
 import { THEMES, applyTheme, currentTheme } from './theme.js';
 import * as fonts from './fonts.js';
@@ -65,6 +65,8 @@ export async function initSettings(){
       <span class="tag" style="background:var(--warn-bg);color:var(--warn-ink);border-color:var(--warn-bg)">BETA</span>
     </div>
     <div class="hint mt">This build is still in active development, not a 1.0 release. Expect rough edges, and please report anything odd.</div>
+    <button class="btn-sm btn-ghost mt" id="settCheckUpd">Check for updates</button>
+    <div class="hint" id="settUpdMsg" style="margin-top:6px"></div>
   </div>
   <div class="card">
     <h2>Twitch Connection</h2>
@@ -226,6 +228,21 @@ export async function initSettings(){
   wireSettingsEvents();
   wireProfileEvents();
   wireFontEvents();
+  {
+    // Says what actually happened — up to date, a new version, or the real
+    // reason it could not ask. The old check reported none of those.
+    const cu = $('settCheckUpd'), msg = $('settUpdMsg');
+    if(cu) cu.addEventListener('click', async ()=>{
+      cu.disabled = true;
+      if(msg){ msg.textContent = 'Checking…'; msg.className = 'hint'; }
+      const r = await checkForUpdate(true);
+      if(msg){
+        msg.textContent = r.message;
+        msg.className = r.ok ? (r.update ? 'ok' : 'hint') : 'warn';
+      }
+      cu.disabled = false;
+    });
+  }
   {
     const rt = $('settResetTabs');
     if(rt) rt.addEventListener('click', ()=>{

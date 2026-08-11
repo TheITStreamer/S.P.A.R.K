@@ -278,7 +278,15 @@ const HELP_CONTENT = {
   },
   commands: {
     title: 'Commands',
-    html: '<h3>Overview</h3>'
+    html: '<h3>Press a key</h3>'
+      + '<p>An action that presses a key combination as if you had typed it, for software that has no proper connection but does respond to a hotkey.</p>'
+      + '<ul>'
+      + '<li>Modifiers are <code>ctrl</code>, <code>shift</code>, <code>alt</code> and <code>win</code>, joined with <code>+</code>. The last part is the key — a letter or number, a named key like <code>space</code> or <code>enter</code>, or <code>F1</code> to <code>F24</code>.</li>'
+      + '<li><strong>F13 to F24 are the safe choice.</strong> No physical keyboard has them, so nothing else on your PC reacts by accident, and most software will happily bind them.</li>'
+      + '<li>The keypress goes to whichever window is focused at that moment. SPARK cannot aim it at a particular program, so if you are typing in chat when a viewer triggers it, your chat gets it.</li>'
+      + '<li><strong>Test</strong> fires it for real — and since you just clicked in SPARK, SPARK is the window that receives it.</li>'
+      + '</ul>'
+      + '<h3>Overview</h3>'
       + '<p>Custom chat commands and rotating auto messages, so you do not need a second bot running alongside SPARK for <code>!discord</code>, <code>!socials</code> or <code>!lurk</code>.</p>'
       + '<h3>Custom Commands</h3>'
       + '<ul>'
@@ -359,7 +367,18 @@ const HELP_CONTENT = {
   diy: {
     title: 'D.I.Y Widgets',
     html: '<h3>Overview</h3>'
-      + '<p>Build your own chat and alert overlays right here. Add a widget, style it with the visual Designer or with your own CSS, then copy its link into OBS. Everything runs on your live Twitch chat and events inside SPARK.</p>'
+      + '<p>Build your own chat, alert and hype train overlays right here. Add a widget, style it with the visual Designer or with your own CSS, then copy its link into OBS. Everything runs on your live Twitch chat and events inside SPARK.</p>'
+      + '<h3>Starting looks</h3>'
+      + '<p>Each widget type comes with a few ready-made styles. Pick one as a starting point and edit the CSS underneath, or use one as-is. If you have already changed the CSS yourself, SPARK asks before replacing it.</p>'
+      + '<h3>Hype train</h3>'
+      + '<ul>'
+      + '<li>Twitch shows hype train progress on your channel page but <strong>not on your stream</strong>, so anyone watching fullscreen or on a phone cannot see it. This widget fills that gap.</li>'
+      + '<li>It is fully automatic — Twitch tells SPARK when one starts, progresses and ends. There is nothing to press.</li>'
+      + '<li>Shows the level, a bar to the next level and the countdown before it expires. <strong>Naming the top contributor is optional and off by default</strong>, since not everyone wants their name on stream.</li>'
+      + '<li>SPARK adds classes you can style against: <code>.levelup</code> for the moment a new level is hit, and <code>.end</code> for the summary.</li>'
+      + '<li>Hype trains only happen every so often, so use <strong>demo mode</strong> in the preview to style it — that runs a fake train on a loop.</li>'
+      + '<li>If you open SPARK part way through a real hype train, it picks up the one already running rather than waiting for the next.</li>'
+      + '</ul>'
       + '<h3>Adding a widget</h3>'
       + '<p>Click <strong>Chat widget</strong> or <strong>Alert widget</strong>. Each one you add gets its own overlay URL. Use <strong>Edit</strong> to open it, <strong>Duplicate</strong> to copy one and try a variation, and the preview on the right runs demo traffic so you can style without waiting for real activity.</p>'
       + '<h3>Designer or Custom CSS</h3>'
@@ -441,7 +460,10 @@ const HELP_CONTENT = {
   },
   settings: {
     title: 'Settings',
-    html: '<h3>Theme</h3>'
+    html: '<h3>Updates</h3>'
+      + '<p>SPARK checks GitHub for a new release shortly after it starts, and shows you what changed if there is one. <strong>Not now</strong> hides that version until the next one comes out.</p>'
+      + '<p><strong>Check for updates</strong> in the About card asks straight away and tells you the result either way — including the reason if it could not ask, such as being offline or GitHub temporarily limiting how often it will answer.</p>'
+      + '<h3>Theme</h3>'
       + '<p>Six looks for SPARK itself: Midnight Purple, Deep Ocean, Charcoal, Forest, Ember and Light. Click one and it applies straight away.</p>'
       + '<ul>'
       + '<li>Your overlays are not touched. What goes out on stream stays exactly as you designed it, because those are your colours rather than SPARK\'s.</li>'
@@ -498,53 +520,115 @@ function initHelpSystem() {
   };
 }
 
-// ── Update check (GitHub releases) ────────────────────────────────────────────
-// Owner/repo the release check queries. Must match the current GitHub owner:
-// a renamed account only redirects until someone else claims the old username.
-const UPDATE_REPO = 'TheITStreamer/S.P.A.R.K';
+// ── Update check ─────────────────────────────────────────────────────────────
+// The request itself lives in Rust (check_for_update). It used to be a browser
+// fetch() from inside the webview and never fired for anybody — the URL was
+// right, the comparison was right, the API answered correctly in a browser on
+// the same machine, and still no banner on two separate PCs. Every other remote
+// call in SPARK goes through Rust; now this one does too.
+//
+// Rust returns either a result or a real error string, so nothing fails
+// silently any more.
 
-function cmpVer(a, b){ // 1 if a > b, -1 if a < b, 0 if equal
-  const pa = a.split('.').map(n=>parseInt(n)||0), pb = b.split('.').map(n=>parseInt(n)||0);
-  for(let i=0;i<Math.max(pa.length,pb.length);i++){
-    if((pa[i]||0) > (pb[i]||0)) return 1;
-    if((pa[i]||0) < (pb[i]||0)) return -1;
-  }
-  return 0;
-}
+let lastUpdateInfo = null;
 
-async function checkForUpdate(){
-  try{
-    const current = await invoke('get_app_version');
-    const r = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`,
-      { headers:{ 'Accept':'application/vnd.github+json' } });
-    if(!r.ok) return; // no releases yet, offline, rate-limited — all fine, stay quiet
-    const rel = await r.json();
-    const m = String(rel.tag_name||'').match(/\d+(\.\d+)*/);
-    if(!m) return;
-    const latest = m[0];
-    if(cmpVer(latest, current) <= 0) return;
-    // Prefer a direct installer link if one is attached to the release
-    const asset = (rel.assets||[]).find(a=>/\.(msi|exe)$/i.test(a.name||''));
-    const url = asset ? asset.browser_download_url
-                      : (rel.html_url || `https://github.com/${UPDATE_REPO}/releases/latest`);
-    showUpdateBanner(latest, url);
-  }catch(e){ /* never let the update check bother the user */ }
-}
+// The release notes are GitHub-flavoured markdown. Rather than pull in a parser
+// for what is a handful of tags, this covers the subset a changelog actually
+// uses — headings, bullets, bold, inline code — and ESCAPES everything first,
+// so nothing in a release body can inject markup.
+function renderNotes(md){
+  const esc = t => t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const inline = t => esc(t)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
 
-function showUpdateBanner(version, url){
-  if(document.getElementById('updateBanner')) return;
-  const bar = document.createElement('div');
-  bar.id = 'updateBanner';
-  bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;display:flex;align-items:center;gap:12px;justify-content:center;padding:8px 14px;background:var(--ok-bg);color:var(--ok-ink);font-size:.88rem;font-weight:600;box-shadow:0 2px 12px rgba(0,0,0,.5)';
-  bar.innerHTML = `<span>SPARK v${version} is available!</span>`
-    + '<button id="updGet" style="cursor:pointer;border:none;border-radius:6px;padding:4px 12px;font-weight:700;background:var(--ok-ink);color:#143914">Download</button>'
-    + '<button id="updX" style="cursor:pointer;border:none;background:none;color:var(--ok-ink);font-size:1.1rem;padding:0 4px">✕</button>';
-  document.body.appendChild(bar);
-  bar.querySelector('#updGet').addEventListener('click', ()=>{
-    try{ if(window.__TAURI__.opener) window.__TAURI__.opener.openUrl(url); else window.open(url,'_blank'); }
-    catch(_){ window.open(url,'_blank'); }
+  const out = [];
+  let inList = false;
+  const closeList = () => { if(inList){ out.push('</ul>'); inList = false; } };
+
+  String(md || '').split(/\r?\n/).forEach(raw => {
+    const line = raw.trim();
+    if(!line){ closeList(); return; }
+
+    const h = line.match(/^#{1,6}\s+(.*)$/);
+    if(h){ closeList(); out.push('<h3>' + inline(h[1]) + '</h3>'); return; }
+
+    const li = line.match(/^[-*]\s+(.*)$/);
+    if(li){
+      if(!inList){ out.push('<ul>'); inList = true; }
+      out.push('<li>' + inline(li[1]) + '</li>');
+      return;
+    }
+
+    closeList();
+    out.push('<p>' + inline(line) + '</p>');
   });
-  bar.querySelector('#updX').addEventListener('click', ()=>bar.remove());
+  closeList();
+  return out.join('') || '<p>No notes were attached to this release.</p>';
+}
+
+function showWhatsNew(info){
+  const box = document.getElementById('whatsNew');
+  if(!box) return;
+  lastUpdateInfo = info;
+  document.getElementById('wnVersion').textContent = info.name || ('SPARK v' + info.latest);
+  document.getElementById('wnBody').innerHTML = renderNotes(info.notes);
+  box.classList.add('open');
+}
+
+function hideWhatsNew(){
+  const box = document.getElementById('whatsNew');
+  if(box) box.classList.remove('open');
+}
+
+function openUrl(url){
+  if(!url) return;
+  try{
+    if(window.__TAURI__.opener) window.__TAURI__.opener.openUrl(url);
+    else window.open(url, '_blank');
+  }catch(_){ window.open(url, '_blank'); }
+}
+
+function wireWhatsNew(){
+  const box = document.getElementById('whatsNew'); if(!box) return;
+  document.getElementById('wnClose')?.addEventListener('click', hideWhatsNew);
+  document.getElementById('wnLater')?.addEventListener('click', () => {
+    // Remembered per version, so dismissing 0.9.1 does not also hide 0.9.2.
+    if(lastUpdateInfo){
+      store.settings.updateDismissed = lastUpdateInfo.latest;
+      invoke('save_app_settings', { data: store.settings }).catch(()=>{});
+    }
+    hideWhatsNew();
+  });
+  document.getElementById('wnGet')?.addEventListener('click', () => {
+    openUrl(lastUpdateInfo && (lastUpdateInfo.url || lastUpdateInfo.page));
+    hideWhatsNew();
+  });
+  box.addEventListener('mousedown', e => { if(e.target === box) hideWhatsNew(); });
+  document.addEventListener('keydown', e => {
+    if(e.key === 'Escape' && box.classList.contains('open')) hideWhatsNew();
+  });
+}
+
+// force = the Settings button. It ignores a previous "Not now" and always
+// reports back, including when there is nothing to report.
+export async function checkForUpdate(force){
+  try{
+    const info = await invoke('check_for_update');
+    if(!info.update){
+      return { ok:true, update:false, message:'You are on the latest version (v' + info.current + ').' };
+    }
+    const dismissed = store.settings && store.settings.updateDismissed;
+    if(!force && dismissed === info.latest){
+      return { ok:true, update:true, message:'v' + info.latest + ' is available.' };
+    }
+    showWhatsNew(info);
+    return { ok:true, update:true, message:'v' + info.latest + ' is available.' };
+  }catch(e){
+    // A real reason now, not silence.
+    return { ok:false, update:false, message:String(e) };
+  }
 }
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
@@ -658,6 +742,11 @@ async function boot(){
   await listen('twitch-ad', ev=>{
     window.dispatchEvent(new CustomEvent('spark-ad', {detail: ev.payload}));
   });
+  // Hype train. The whole payload is passed through untouched — see the Rust
+  // side for why. _phase is begin | progress | end.
+  await listen('twitch-hypetrain', ev=>{
+    window.dispatchEvent(new CustomEvent('spark-hypetrain', {detail: ev.payload}));
+  });
   // Stream went live or ended (EventSub). Two things come out of this:
   //
   //   spark-stream       — every event, for anything that just needs to know
@@ -707,7 +796,11 @@ async function boot(){
   });
 
   // fire-and-forget — never blocks or breaks boot
-  checkForUpdate();
+  wireWhatsNew();
+  // A moment after boot rather than during it: the first seconds are the
+  // busiest, and a check that fails because the network was not ready yet used
+  // to cost the whole session — it never retried.
+  setTimeout(() => { checkForUpdate().catch(()=>{}); }, 4000);
 }
 
 boot().catch(err => {

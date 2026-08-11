@@ -144,6 +144,91 @@
         raid:   function (name, amount) { addEvent('raid', name, amount); },
       };
     },
+    hypetrain: function () {
+      var el = document.getElementById('spark-hypetrain');
+      var hideTimer = null, tick = null;
+
+      // Field names are read DEFENSIVELY on purpose. Hype train v2 describes
+      // Rust forwards the whole payload untouched, so anything Twitch sends is
+      // available here even if SPARK was never taught its name.
+      function num(v, d) { var n = Number(v); return isFinite(n) ? n : d; }
+
+      function topName(d) {
+        var list = d.top_contributions || d.top_contributors;
+        if (!list || !list.length) return '';
+        var t = list[0] || {};
+        return t.user_name || t.user_login || t.user || '';
+      }
+
+      function fmtLeft(iso) {
+        if (!iso) return '';
+        var ms = new Date(iso).getTime() - Date.now();
+        if (!isFinite(ms) || ms < 0) ms = 0;
+        var s = Math.round(ms / 1000);
+        return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+      }
+
+      function render(d, phase) {
+        var level = num(d.level, 1);
+        var total = num(d.total, 0);
+        var goal  = num(d.goal, 0);
+        var pct   = goal > 0 ? Math.max(0, Math.min(100, (total / goal) * 100)) : 0;
+        var top   = SHOWTOP ? topName(d) : '';
+
+        el.className = 'hypetrain show ' + phase;
+        el.innerHTML =
+            '<div class="ht-head">'
+          +   '<span class="ht-label">' + (phase === 'end' ? 'Hype train over' : 'Hype train') + '</span>'
+          +   (phase === 'end' ? '' : '<span class="ht-time">' + esc(fmtLeft(d.expires_at)) + '</span>')
+          + '</div>'
+          + '<div class="ht-level">Level ' + esc(level) + '</div>'
+          + (phase === 'end' ? '' :
+              '<div class="ht-bar"><div class="ht-fill" style="width:' + pct.toFixed(1) + '%"></div></div>'
+            + '<div class="ht-progress">' + esc(total.toLocaleString()) + ' / ' + esc(goal.toLocaleString()) + '</div>')
+          + (top ? '<div class="ht-top">Top: <span class="ht-top-name">' + esc(top) + '</span></div>' : '');
+
+        // Countdown ticks locally rather than waiting for the next event —
+        // progress events only arrive when someone contributes, which can be
+        // a long quiet minute while the clock is visibly running out.
+        clearInterval(tick);
+        if (phase !== 'end' && d.expires_at) {
+          tick = setInterval(function () {
+            var t = el.querySelector('.ht-time');
+            if (t) t.textContent = fmtLeft(d.expires_at);
+          }, 1000);
+        }
+      }
+
+      return {
+        hypetrain: function (d) {
+          var phase = d._phase || 'progress';
+          clearTimeout(hideTimer);
+
+          if (phase === 'begin' || phase === 'progress') {
+            var was = el.getAttribute('data-level');
+            render(d, phase);
+            // Level up is the moment worth celebrating. A class rather than a
+            // hardcoded animation, so a preset decides what it looks like.
+            var lvl = String(num(d.level, 1));
+            if (was && was !== lvl) {
+              el.classList.add('levelup');
+              setTimeout(function () { el.classList.remove('levelup'); }, 2600);
+            }
+            el.setAttribute('data-level', lvl);
+            return;
+          }
+
+          // Ended: hold the summary briefly, then clear out.
+          render(d, 'end');
+          el.removeAttribute('data-level');
+          hideTimer = setTimeout(function () {
+            el.className = 'hypetrain';
+            el.innerHTML = '';
+          }, Math.max(3000, DURMS));
+        }
+      };
+    },
+
     alert: function () {
       var el = document.getElementById('spark-alert');
       var q = [], busy = false;
@@ -205,6 +290,7 @@
   var MAXMSG = window.SPARK_WIDGET_MAXMSG || 20;    // chat: max messages kept in the DOM
   var HIDEMS = window.SPARK_WIDGET_HIDEMS || 0;     // chat: remove a message after this long (0 = never)
   var DURMS = window.SPARK_WIDGET_DURMS || 5000;    // alert: on-screen time
+  var SHOWTOP = !!window.SPARK_WIDGET_SHOWTOP;      // hype train: name the top contributor
   var WID = window.SPARK_WIDGET_ID || '';
   var api = renderers[TYPE] ? renderers[TYPE]() : null;
   var sfx = null;
@@ -223,6 +309,7 @@
     if (d.sparkAlertText) ALERTTEXT = d.sparkAlertText;
     if (d.sparkChatEventText) CHATEVENTTEXT = d.sparkChatEventText;
     if (d.sparkRoleStyle) ROLESTYLE = d.sparkRoleStyle;
+    if (typeof d.sparkShowTop === 'boolean') SHOWTOP = d.sparkShowTop;
   });
 
   function playSfx() {
@@ -246,6 +333,12 @@
     if (ev.type === 'message' && api.message) {
       if (isIgnored(ev.username || ev.display)) return;   // skip bots / ignore list
       api.message(ev);
+      return;
+    }
+    if (ev.type === 'hypetrain' && api.hypetrain) {
+      api.hypetrain(ev);
+      // The sound belongs to a level up, not to every point scored.
+      if (!fromDemo && ev._phase === 'begin') playSfx();
       return;
     }
     if (ev.type === 'alert' && api[ev.kind]) {
@@ -325,6 +418,45 @@
             handle({ type: 'alert', kind: k, name: pick(names), amount: k === 'raid' ? 5 + Math.floor(Math.random() * 40) : 0 }, true);
           }, 5000);
         }
+      } else if (TYPE === 'hypetrain') {
+        // A fake train, because real ones happen a couple of times a MONTH.
+        // Without this you would tweak a colour and then wait weeks to see it.
+        // Runs the whole arc — start, climb, level up, finish — then loops,
+        // so the styling can actually be looked at.
+        var lvl = 1, tot = 0, goalFor = function (l) { return 1600 + (l - 1) * 1400; };
+        var htTick = null;
+
+        function htSend(phase) {
+          handle({
+            type: 'hypetrain', _phase: phase,
+            level: lvl, total: tot, goal: goalFor(lvl),
+            expires_at: new Date(Date.now() + 90000).toISOString(),
+            top_contributions: [{ user_name: pick(names), type: 'subscription', total: 1500 }]
+          }, true);
+        }
+
+        function htStart() {
+          lvl = 1; tot = 0;
+          htSend('begin');
+          clearInterval(htTick);
+          htTick = setInterval(function () {
+            tot += 260 + Math.floor(Math.random() * 380);
+            if (tot >= goalFor(lvl)) {
+              if (lvl >= 5) {                 // finish, pause, run it again
+                clearInterval(htTick);
+                htSend('end');
+                setTimeout(htStart, 5200);
+                return;
+              }
+              lvl++; tot = 0;                 // level up
+            }
+            htSend('progress');
+            // 2.5s, not 1.1s. The old rate rebuilt the widget faster than it
+            // could settle, which read as constant flicker in a small preview.
+          }, 2500);
+        }
+        setTimeout(htStart, 400);
+
       } else {
         // Cycle one alert at a time, spaced by the on-screen duration, so the
         // preview never piles up. Disabled kinds are skipped by handle().

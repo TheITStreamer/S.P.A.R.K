@@ -159,6 +159,48 @@ body.side-collapsed #sideCollapse{justify-content:center;padding:9px 0;gap:0}
 body.side-collapsed #sideCollapse .lbl{display:none}
 body.side-collapsed #sideCollapse .chev{transform:rotate(180deg)}
 
+/* ── What's new ─────────────────────────────────────────────────────────────
+   Shows the release notes pulled straight from GitHub, so the changelog is
+   written once and appears in both places. Body scrolls; header and buttons
+   stay put, because these notes can be long. */
+#whatsNew{
+  display:none;position:fixed;inset:0;z-index:1100;
+  background:var(--scrim);backdrop-filter:blur(4px);
+  align-items:center;justify-content:center;padding:5vh 16px;
+}
+#whatsNew.open{display:flex}
+#wnBox{
+  background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  width:min(640px,94vw);max-height:90vh;display:flex;flex-direction:column;
+  box-shadow:0 24px 60px rgba(0,0,0,.6);
+}
+#wnHead{
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0;
+  padding:16px 20px 12px;border-bottom:1px solid var(--line);
+}
+#wnTitle{
+  font-size:.72rem;font-weight:800;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--gold-ink);display:flex;align-items:center;gap:8px;
+}
+#wnTitle svg{width:15px;height:15px;opacity:.9}
+#wnClose{
+  background:transparent;border:none;color:var(--muted);font-size:1.2rem;
+  padding:0 4px;line-height:1;cursor:pointer;
+}
+#wnClose:hover{color:var(--ink);transform:none;filter:none}
+#wnBody{overflow-y:auto;padding:16px 20px;font-size:.85rem;line-height:1.6;color:var(--muted)}
+#wnBody h3{
+  font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--gold-ink);
+  font-weight:800;margin:18px 0 8px;
+}
+#wnBody h3:first-child{margin-top:0}
+#wnBody p{margin-bottom:9px}
+#wnBody ul{padding-left:18px;margin-bottom:10px}
+#wnBody li{margin-bottom:5px}
+#wnBody strong{color:var(--ink)}
+#wnBody code{background:var(--code-bg);padding:2px 6px;border-radius:5px;font-size:.8rem;color:var(--gold-ink)}
+#wnFoot{display:flex;gap:10px;justify-content:flex-end;padding:14px 20px 18px;flex-shrink:0}
+
 /* ── Ctrl+K switcher ────────────────────────────────────────────────────────
    Jump straight to a tab without reaching for the mouse. */
 #tabJump{
@@ -367,7 +409,7 @@ body.bc-dragging{cursor:row-resize;user-select:none}
   font-size:.62rem;font-weight:700;letter-spacing:.06em;text-transform:none;
   padding:1px 7px;border-radius:5px;background:var(--ok-bg);color:var(--ok-ink);
 }
-.bc-btn-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.bc-btn-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:6px}
 
 /* Broadcast chat pane */
 .bc-chat-head{
@@ -906,6 +948,24 @@ button.del{background:var(--warn-bg)}
       <button id="helpBoxClose" title="Close">&#x2715;</button>
     </div>
     <div id="helpBoxBody"></div>
+  </div>
+</div>
+
+<!-- What's new -->
+<div id="whatsNew">
+  <div id="wnBox">
+    <div id="wnHead">
+      <div id="wnTitle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.4 2.3 7.2-6.3-4.6-6.3 4.6L7.9 13.8 2 9.4h7.6z"/></svg>
+        <span id="wnVersion">Update available</span>
+      </div>
+      <button id="wnClose" title="Close">&#x2715;</button>
+    </div>
+    <div id="wnBody"></div>
+    <div id="wnFoot">
+      <button id="wnLater" class="btn-ghost">Not now</button>
+      <button id="wnGet" class="btn-gold">Download</button>
+    </div>
   </div>
 </div>
 

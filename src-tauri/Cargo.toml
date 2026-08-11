@@ -1,6 +1,6 @@
 [package]
 name = "spark"
-version = "0.9.0"
+version = "0.9.1"
 description = "S.P.A.R.K. - Streaming Panel for Alerts, Redeems and Key tools"
 authors = ["SPARK"]
 edition = "2021"
@@ -23,6 +23,11 @@ serde_json = "1"
 tiny_http = "0.12"
 reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
 tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+# Simulated keyboard input for the Commands tab's keypress action. Windows only
+# by intent — SPARK is a Windows app — but the crate itself is cross-platform.
+# 0.6 specifically: the Settings / Direction / Keyboard-trait API used in
+# send_keypress was verified against the 0.6.1 docs. Earlier versions differ.
+enigo = "0.6"
 
 [profile.release]
 panic = "abort"

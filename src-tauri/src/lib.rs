@@ -928,6 +928,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_all_data,
             get_app_version,
+            check_for_update,
+            send_keypress,
             set_tool_visibility,
             set_master_border,
             save_wheel, wheel_overlay_update, wheel_overlay_spin,
@@ -983,6 +985,7 @@ pub fn run() {
             twitch::twitch_get_followage,
             twitch::twitch_get_sub_count,
             twitch::twitch_get_ad_schedule,
+            twitch::twitch_get_hype_train,
             twitch::twitch_update_channel_info,
             twitch::twitch_get_channel_info,
             twitch::twitch_search_categories,
@@ -1178,4 +1181,212 @@ fn strip_inline_profile_data(settings: &mut Value) -> bool {
         }
     }
     changed
+}
+
+// ── Update check ──────────────────────────────────────────────────────────────
+// This lives in Rust, not the frontend, and that is the whole point of it.
+//
+// It used to be a browser fetch() to api.github.com from inside the webview —
+// one of only two remote fetch() calls in the entire app, while the other fifty
+// went through reqwest. It never fired for anyone: 0.8.2 and 0.8.3 both shipped
+// with a correct URL and correct comparison logic, the API returned the right
+// answer in a browser on the same machine, and the banner still never appeared
+// on two different PCs. A webview fetch to a third-party origin has a pile of
+// ways to fail silently that a Rust HTTPS request simply does not have.
+//
+// The old version also swallowed EVERY failure — offline, rate-limited, 404,
+// blocked — and SPARK has no devtools in a release build, so there was no way
+// to tell "no update" from "never managed to ask".
+//
+// So: same request, made the way the rest of SPARK makes requests, returning a
+// result the UI can actually report.
+
+const UPDATE_REPO: &str = "TheITStreamer/S.P.A.R.K";
+
+// Compares dotted versions numerically. "0.10.0" is NEWER than "0.9.0", which a
+// string comparison gets backwards — worth keeping in mind now that the minor
+// number is climbing.
+fn newer_than(a: &str, b: &str) -> bool {
+    let pa: Vec<u32> = a.split('.').map(|p| p.trim().parse().unwrap_or(0)).collect();
+    let pb: Vec<u32> = b.split('.').map(|p| p.trim().parse().unwrap_or(0)).collect();
+    for i in 0..pa.len().max(pb.len()) {
+        let x = pa.get(i).copied().unwrap_or(0);
+        let y = pb.get(i).copied().unwrap_or(0);
+        if x != y { return x > y; }
+    }
+    false
+}
+
+// Pulls the leading x.y.z out of a tag like "v0.9.0".
+fn version_from_tag(tag: &str) -> String {
+    let mut out = String::new();
+    for c in tag.chars() {
+        if c.is_ascii_digit() || c == '.' { out.push(c); }
+        else if !out.is_empty() { break; }
+    }
+    out.trim_matches('.').to_string()
+}
+
+#[tauri::command]
+async fn check_for_update(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        let _ = &app;
+
+        let c = reqwest::blocking::Client::builder()
+            // GitHub REJECTS API requests with no User-Agent. A browser sets one
+            // for you; reqwest does not, so it has to be explicit here.
+            .user_agent(format!("SPARK/{}", current))
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        let url = format!("https://api.github.com/repos/{}/releases/latest", UPDATE_REPO);
+        let r = c.get(&url)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .map_err(|e| format!("Could not reach GitHub: {}", e))?;
+
+        let status = r.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Err("GitHub has no published releases for SPARK yet.".into());
+        }
+        if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            // 60 unauthenticated calls an hour, per connection.
+            return Err("GitHub is rate-limiting update checks right now. Try again in an hour.".into());
+        }
+        if !status.is_success() {
+            return Err(format!("GitHub returned {} when asked for the latest release.", status.as_u16()));
+        }
+
+        let v: Value = r.json().map_err(|e| format!("GitHub sent something unreadable: {}", e))?;
+        let tag = v.get("tag_name").and_then(|x| x.as_str()).unwrap_or("");
+        let latest = version_from_tag(tag);
+        if latest.is_empty() {
+            return Err(format!("Could not read a version number out of the release tag \"{}\".", tag));
+        }
+
+        // Prefer a direct installer link when one is attached.
+        let dl = v.get("assets").and_then(|a| a.as_array())
+            .and_then(|arr| arr.iter().find(|a| {
+                a.get("name").and_then(|n| n.as_str())
+                    .map(|n| { let n = n.to_ascii_lowercase(); n.ends_with(".exe") || n.ends_with(".msi") })
+                    .unwrap_or(false)
+            }))
+            .and_then(|a| a.get("browser_download_url").and_then(|u| u.as_str()))
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| v.get("html_url").and_then(|x| x.as_str()).unwrap_or("").to_string());
+
+        Ok(json!({
+            "current":   current,
+            "latest":    latest,
+            "update":    newer_than(&latest, &current),
+            "name":      v.get("name").and_then(|x| x.as_str()).unwrap_or(tag),
+            // The release notes, so the popup can show what actually changed
+            // instead of just a version number.
+            "notes":     v.get("body").and_then(|x| x.as_str()).unwrap_or(""),
+            "url":       dl,
+            "page":      v.get("html_url").and_then(|x| x.as_str()).unwrap_or(""),
+            "published": v.get("published_at").and_then(|x| x.as_str()).unwrap_or(""),
+        }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+// ── Simulated keypresses ──────────────────────────────────────────────────────
+// For software that has no API but does respond to a hotkey. A command or a
+// channel point redeem presses a key combination as if you had typed it.
+//
+// This goes to whatever window has focus — SPARK cannot aim it at a specific
+// program. That is a property of how Windows delivers synthetic input, not a
+// shortcut taken here, and the UI says so.
+
+// Accepts things like "ctrl+shift+r", "F13", "alt+F4", "a".
+// Modifiers may appear in any order; the last part is the actual key.
+fn parse_hotkey(combo: &str) -> Result<(Vec<enigo::Key>, enigo::Key), String> {
+    use enigo::Key;
+
+    let parts: Vec<String> = combo
+        .split('+')
+        .map(|p| p.trim().to_ascii_lowercase())
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.is_empty() { return Err("No key given.".into()); }
+
+    let (key_part, mod_parts) = parts.split_last().unwrap();
+
+    let mut mods = Vec::new();
+    for m in mod_parts {
+        mods.push(match m.as_str() {
+            "ctrl" | "control" => Key::Control,
+            "shift"            => Key::Shift,
+            "alt"              => Key::Alt,
+            "win" | "meta" | "super" | "cmd" => Key::Meta,
+            other => return Err(format!("\"{}\" is not a modifier. Use ctrl, shift, alt or win.", other)),
+        });
+    }
+
+    // Function keys first — F13 and up exist on no real keyboard, which makes
+    // them ideal stream hotkeys: nothing else on the PC reacts by accident.
+    //
+    // enigo names these as SEPARATE variants (Key::F1 ... Key::F24), NOT as
+    // Key::F(n). There is no way to build one from a number, hence the list.
+    let key = if let Some(n) = key_part.strip_prefix('f').and_then(|n| n.parse::<u32>().ok()) {
+        match n {
+            1=>Key::F1,   2=>Key::F2,   3=>Key::F3,   4=>Key::F4,
+            5=>Key::F5,   6=>Key::F6,   7=>Key::F7,   8=>Key::F8,
+            9=>Key::F9,  10=>Key::F10, 11=>Key::F11, 12=>Key::F12,
+           13=>Key::F13, 14=>Key::F14, 15=>Key::F15, 16=>Key::F16,
+           17=>Key::F17, 18=>Key::F18, 19=>Key::F19, 20=>Key::F20,
+           21=>Key::F21, 22=>Key::F22, 23=>Key::F23, 24=>Key::F24,
+            _ => return Err(format!("F{} is not a key. F1 to F24 only.", n)),
+        }
+    } else {
+        match key_part.as_str() {
+            "space"                  => Key::Space,
+            "enter" | "return"       => Key::Return,
+            "tab"                    => Key::Tab,
+            "esc" | "escape"         => Key::Escape,
+            "backspace"              => Key::Backspace,
+            "delete" | "del"         => Key::Delete,
+            "home"                   => Key::Home,
+            "end"                    => Key::End,
+            "pageup"                 => Key::PageUp,
+            "pagedown"               => Key::PageDown,
+            "up"                     => Key::UpArrow,
+            "down"                   => Key::DownArrow,
+            "left"                   => Key::LeftArrow,
+            "right"                  => Key::RightArrow,
+            other => {
+                let mut ch = other.chars();
+                match (ch.next(), ch.next()) {
+                    (Some(c), None) => Key::Unicode(c),
+                    _ => return Err(format!("\"{}\" is not a key SPARK understands.", other)),
+                }
+            }
+        }
+    };
+
+    Ok((mods, key))
+}
+
+#[tauri::command]
+fn send_keypress(combo: String) -> Result<(), String> {
+    use enigo::{Enigo, Settings, Keyboard, Direction};
+
+    let (mods, key) = parse_hotkey(&combo)?;
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("Could not reach the keyboard: {}", e))?;
+
+    // Modifiers down, key tapped, modifiers up IN REVERSE. Releasing them in
+    // the order they were pressed can leave a modifier stuck down in some apps,
+    // which is far worse than the keypress simply not working.
+    for m in &mods {
+        enigo.key(*m, Direction::Press).map_err(|e| e.to_string())?;
+    }
+    let tap = enigo.key(key, Direction::Click).map_err(|e| e.to_string());
+    for m in mods.iter().rev() {
+        let _ = enigo.key(*m, Direction::Release);
+    }
+    tap?;
+    Ok(())
 }

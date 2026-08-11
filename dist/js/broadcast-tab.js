@@ -753,6 +753,13 @@ const FOLLOW_AGES = [
   [129600,'3 months'],
 ];
 
+// Seconds a viewer must wait between messages. Twitch accepts 3..120.
+const SLOW_WAITS = [
+  [3,  '3 seconds'],  [5,  '5 seconds'],   [10, '10 seconds'],
+  [20, '20 seconds'], [30, '30 seconds'],  [60, '1 minute'],
+  [120,'2 minutes'],
+];
+
 // Ad lengths Twitch accepts, in the steps Kyle asked for.
 const AD_LENGTHS = [
   [30,  '30s'],  [60,  '1m'],   [90,  '1m 30s'],
@@ -770,12 +777,18 @@ function buildActionsPane(){
         <button class="btn-sm btn-ghost" id="bcModeEmote">Emote only</button>
         <button class="btn-sm btn-ghost" id="bcModeSub">Subs only</button>
         <button class="btn-sm btn-ghost" id="bcModeFollow">Followers only</button>
+        <button class="btn-sm btn-ghost" id="bcModeSlow">Slow mode</button>
       </div>
       <div style="margin-top:8px">
         <label style="margin-bottom:4px">Followers-only: must have followed for at least</label>
         <select id="bcFollowMins">${FOLLOW_AGES.map(([m,l]) =>
           `<option value="${m}">${l}</option>`).join('')}</select>
         <div class="hint">Makes a brand-new follower wait before they can chat. Follow-and-spam bots follow and post straight away, so even ten minutes stops most of them. Only applies while followers-only is on.</div>
+      </div>
+      <div style="margin-top:8px">
+        <label style="margin-bottom:4px">Slow mode: wait between messages</label>
+        <select id="bcSlowWait">${SLOW_WAITS.map(([s,l]) =>
+          `<option value="${s}"${s===30?' selected':''}>${l}</option>`).join('')}</select>
       </div>
       <button class="btn-sm btn-danger mt full" id="bcClearChat">Clear chat history</button>
       <div class="hint">Clearing wipes chat for everyone watching. It cannot be undone.</div>
@@ -863,7 +876,8 @@ function wireSections(){
 
 // ── Chat modes ────────────────────────────────────────────────────────────────
 
-let chatModes = { emote_mode:false, subscriber_mode:false, follower_mode:false, follower_mode_duration:0 };
+let chatModes = { emote_mode:false, subscriber_mode:false, follower_mode:false,
+                  follower_mode_duration:0, slow_mode:false, slow_mode_wait_time:30 };
 
 function paintChatModes(){
   const set = (id, on) => {
@@ -875,6 +889,7 @@ function paintChatModes(){
   set('bcModeEmote',  chatModes.emote_mode);
   set('bcModeSub',    chatModes.subscriber_mode);
   set('bcModeFollow', chatModes.follower_mode);
+  set('bcModeSlow',   chatModes.slow_mode);
 
   const mins = $('bcFollowMins');
   if(mins && document.activeElement !== mins){
@@ -890,10 +905,23 @@ function paintChatModes(){
     mins.value = cur;
   }
 
+  const wait = $('bcSlowWait');
+  if(wait && document.activeElement !== wait){
+    const cur = String(chatModes.slow_mode_wait_time || 30);
+    // A wait set from Twitch's own UI can be a value not in our list.
+    if(!Array.from(wait.options).some(o => o.value === cur)){
+      const o = document.createElement('option');
+      o.value = cur; o.textContent = cur + ' seconds';
+      wait.appendChild(o);
+    }
+    wait.value = cur;
+  }
+
   const on = [];
   if(chatModes.emote_mode)      on.push('emote');
   if(chatModes.subscriber_mode) on.push('subs');
   if(chatModes.follower_mode)   on.push('followers');
+  if(chatModes.slow_mode)       on.push('slow');
   secTag('chatmode', on.length ? on.join(' + ') : '');
 }
 
@@ -906,16 +934,29 @@ async function refreshChatModes(){
   }catch(e){ /* no scope yet, or offline — leave the buttons as they are */ }
 }
 
+const MODE_LABEL = {
+  emote:      'Emote-only',
+  subscriber: 'Subs-only',
+  follower:   'Followers-only',
+  slow:       'Slow mode',
+};
+
 async function toggleChatMode(mode, key){
   const want = !chatModes[key];
   try{
-    const minutes = mode === 'follower' ? (Number($('bcFollowMins').value) || 0) : null;
-    await invoke('twitch_set_chat_mode', { mode, enabled: want, minutes });
+    // The one argument means different units per mode — MINUTES of follow age
+    // for follower mode, SECONDS between messages for slow mode. Rust reads it
+    // per mode; the mistake to avoid is sending one picker's value for both.
+    let amount = null;
+    if(mode === 'follower') amount = Number($('bcFollowMins').value) || 0;
+    if(mode === 'slow')     amount = Number($('bcSlowWait').value)  || 30;
+
+    await invoke('twitch_set_chat_mode', { mode, enabled: want, minutes: amount });
     chatModes[key] = want;
-    if(mode === 'follower' && want) chatModes.follower_mode_duration = minutes || 0;
+    if(want && mode === 'follower') chatModes.follower_mode_duration = amount || 0;
+    if(want && mode === 'slow')     chatModes.slow_mode_wait_time   = amount || 30;
     paintChatModes();
-    actOk(want ? `${mode === 'emote' ? 'Emote-only' : mode === 'subscriber' ? 'Subs-only' : 'Followers-only'} chat is on.`
-               : 'Turned off.');
+    actOk(want ? `${MODE_LABEL[mode] || 'That mode'} is on.` : 'Turned off.');
   }catch(e){ actWarn(String(e)); }
 }
 
@@ -1169,7 +1210,22 @@ function wireActions(){
       actOk('Minimum follow age updated.');
     }catch(e){ actWarn(String(e)); }
   });
+  const sl = $('bcModeSlow');   if(sl) sl.addEventListener('click', ()=>toggleChatMode('slow','slow_mode'));
   const cc = $('bcClearChat');  if(cc) cc.addEventListener('click', clearChat);
+
+  // Same as the follow-age picker: changing the wait while slow mode is already
+  // on has to re-send, or the dropdown quietly disagrees with Twitch.
+  const swait = $('bcSlowWait');
+  if(swait) swait.addEventListener('change', async ()=>{
+    if(!chatModes.slow_mode) return;
+    const secs = Number(swait.value) || 30;
+    try{
+      await invoke('twitch_set_chat_mode', { mode:'slow', enabled:true, minutes:secs });
+      chatModes.slow_mode_wait_time = secs;
+      paintChatModes();
+      actOk('Slow mode wait updated.');
+    }catch(e){ actWarn(String(e)); }
+  });
 
   const pane = $('bcActionsPane');
   if(pane) pane.querySelectorAll('[data-ad]').forEach(b=>{

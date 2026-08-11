@@ -44,7 +44,8 @@ const SCOPE_LABELS = {
   'channel:edit:commercial':         'starting ad breaks',
   'channel:manage:ads':              'snoozing the next ad',
   'moderator:read:chat_settings':    'reading your chat settings',
-  'moderator:manage:chat_settings':  'emote-only, subs-only and followers-only chat'
+  'moderator:manage:chat_settings':  'emote-only, subs-only and followers-only chat',
+  'channel:read:hype_train':         'the hype train overlay'
 };
 
 function labelFor(scope){
