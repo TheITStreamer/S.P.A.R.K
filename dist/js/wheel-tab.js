@@ -194,7 +194,7 @@ function playSound(force){
   if(!soundSettings.enabled||!soundSettings.path) return;
   winnerAudio = playAudioFile(soundSettings.path, {
     force: !!force,
-    onError: ()=> showSoundWarn('Sound file missing or incompatible.'),
+    onError: (m)=> showSoundWarn(m || 'Sound file missing or incompatible.'),
   });
 }
 function showSoundWarn(m){ const w=$('wSoundWarn'); if(w){ w.textContent='⚠ '+m; w.style.display='block'; }}
@@ -207,7 +207,7 @@ function playSpinSound(){
   // so it's exempt from the concurrent cap rather than hogging a slot.
   spinAudio = playAudioFile(spinSoundSettings.path, {
     loop: false, force: true,
-    onError: ()=>{ const w=$('wSpinSoundWarn'); if(w){ w.textContent='⚠ Spin sound missing or incompatible.'; w.style.display='block'; }},
+    onError: (m)=>{ const w=$('wSpinSoundWarn'); if(w){ w.textContent='⚠ '+(m || 'Spin sound missing or incompatible.'); w.style.display='block'; }},
   });
 }
 function stopSpinSound(){

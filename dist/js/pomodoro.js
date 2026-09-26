@@ -1,7 +1,7 @@
 // Pomodoro engine + UI. Lives inside the Tasks (Co-work) tab.
 // Persisted as part of the tasks blob (key: pomo) via the tasks-tab persist().
 import { $, esc, flash } from './utils.js';
-import { playSound as playAudioFile } from './audio.js';
+import { playSound as playAudioFile, playBeep } from './audio.js';
 import { liveSet } from './store.js';
 
 const { invoke } = window.__TAURI__.core;
@@ -125,27 +125,13 @@ function pushOverlay(){
 }
 
 // ── Sounds ────────────────────────────────────────────────────────────────────
-function beep(){
-  try{
-    const ac=new (window.AudioContext||window.webkitAudioContext)();
-    const notes=[[880,0],[1108.7,0.18],[1318.5,0.36]];
-    notes.forEach(([f,t])=>{
-      const o=ac.createOscillator(), g=ac.createGain();
-      o.frequency.value=f; o.type='sine';
-      g.gain.setValueAtTime(0.001,ac.currentTime+t);
-      g.gain.exponentialRampToValueAtTime(0.25,ac.currentTime+t+0.02);
-      g.gain.exponentialRampToValueAtTime(0.001,ac.currentTime+t+0.35);
-      o.connect(g); g.connect(ac.destination);
-      o.start(ac.currentTime+t); o.stop(ac.currentTime+t+0.4);
-    });
-    setTimeout(()=>ac.close().catch(()=>{}),1200);
-  }catch(e){}
-}
+// Built-in chime, played natively so OBS app-audio capture picks it up.
+function beep(){ playBeep(); }
 function playPhaseSound(){
   if(!cfg.soundEnabled) return;
   if(cfg.soundPath){
     // Phase changes are rare and worth hearing, so they bypass the cap.
-    if(!playAudioFile(cfg.soundPath, { force:true, onError: beep })) beep();
+    playAudioFile(cfg.soundPath, { force:true, onError: beep });
   } else beep();
 }
 

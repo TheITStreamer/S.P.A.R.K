@@ -264,7 +264,7 @@ function buildLeft(){
   </div>
   <div class="card">
     <h2>Auto Timers</h2>
-    <div class="hint" style="margin-bottom:10px">Turn a channel point redeem into a brand new numbered timer. Whatever the viewer types becomes the label. Add one config per reward, so different redeems can each spawn their own kind of timer.</div>
+    <div class="hint" style="margin-bottom:10px">Turn a channel point redeem into a brand new numbered timer. Whatever the viewer types becomes the label. If the reward has no text box, the viewer's name is used instead. Add one config per reward, so different redeems can each spawn their own kind of timer.</div>
     <div id="atConfigList"></div>
     <div class="row mt"><button class="btn-sm btn-gold full" id="atNewCfg">＋ New Auto Timer</button><button class="btn-sm" id="atRefreshRewards" title="Reload channel point rewards">⟳</button></div>
     <div style="margin-top:12px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,.2);font-size:.75rem;color:var(--muted)">
@@ -343,7 +343,7 @@ function wireTimerEvents(){
     if(cfg){
       try{
         if(toolBlocked('timers', d.user_name)){ noteRedeem(d, cfg, 'tool-off'); return; }
-        const res=spawnAutoTimer(cfg, d.user_input||'');
+        const res=spawnAutoTimer(cfg, d.user_input||'', d.user_name||'');
         noteRedeem(d, cfg, res.ok ? 'created' : res.reason);
       }catch(err){
         console.error('auto timer spawn failed:', err);
@@ -555,13 +555,13 @@ function openConfigEditor(cfg){
         +'<div><label>Title</label><input id="atEdTitle" type="text" value="'+esc(cfg.title||'')+'"></div>'
         +'<div><label>Channel point reward</label><select id="atEdReward"><option value="'+esc(cfg.rewardId||'')+'">'+esc(cfg._rewardTitle||cfg.rewardId||'Loading...')+'</option></select></div>'
       +'</div>'
-      +'<div style="font-size:.72rem;color:var(--muted);margin-bottom:10px">The reward must have <strong>Require viewer to enter text</strong> ticked in your Twitch dashboard, otherwise there is nothing to label the timer with.</div>'
+      +'<div style="font-size:.72rem;color:var(--muted);margin-bottom:10px">Viewer text is optional. If the reward has no text box, the timer is labelled with the viewer\'s name.</div>'
       +'<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;cursor:pointer;margin-bottom:10px"><input type="checkbox" id="atEdEnabled" '+(cfg.enabled?'checked':'')+'>  Enabled</label>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
         +'<div><label>Duration</label><input id="atEdDuration" type="text" value="'+esc(fmtTime(cfg.duration))+'"><div style="font-size:.72rem;color:var(--muted);margin-top:3px">mm:ss | h:mm:ss | d:h:mm:ss</div></div>'
         +'<div><label>When created</label><select id="atEdStartMode"><option value="immediate" '+(cfg.startMode==='immediate'?'selected':'')+'>Start counting immediately</option><option value="command" '+(cfg.startMode==='command'?'selected':'')+'>Wait for !stm</option></select></div>'
       +'</div>'
-      +'<div style="margin-bottom:10px"><label>Label template</label><input id="atEdTemplate" type="text" value="'+esc(cfg.nameTemplate||'{text}')+'"><div style="font-size:.72rem;color:var(--muted);margin-top:3px">{text} what the viewer typed | {n} timer number | {title} this config title</div></div>'
+      +'<div style="margin-bottom:10px"><label>Label template</label><input id="atEdTemplate" type="text" value="'+esc(cfg.nameTemplate||'{text}')+'"><div style="font-size:.72rem;color:var(--muted);margin-top:3px">{text} what the viewer typed (or their name) | {n} timer number | {title} this config title</div></div>'
       +'<div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin-bottom:10px">'
         +'<div><label>Font</label><select id="atEdFont">'+fontOptionsHtml(cfg.font||'Roboto Mono')+'</select></div>'
         +'<div><label>Text colour</label><input id="atEdColor" type="color" value="'+(cfg.color||'#ffc83d')+'" style="width:50px;height:32px;border:none;background:none;cursor:pointer"></div>'
@@ -644,12 +644,11 @@ function openConfigEditor(cfg){
 
 // `text` is supplied directly by the Test button; a real redeem passes the
 // viewer's input.
-function spawnAutoTimer(cfg, text){
-  text=(text||'').trim();
-  if(!text){
-    say(`"${cfg.title}" needs viewer text enabled on its reward before it can create a timer.`);
-    return { ok:false, reason:'no-text' };
-  }
+// text: what the viewer typed. Optional: rewards without "Require viewer to
+// enter text" still work, and the timer is labelled with the viewer's name
+// (or the config title if Twitch sent no name).
+function spawnAutoTimer(cfg, text, user){
+  text=(text||'').trim() || (user||'').trim() || cfg.title || 'Timer';
   const mine=timers.filter(t=>t.cfgId===cfg.id).length;
   if(cfg.maxConcurrent>0 && mine>=cfg.maxConcurrent){
     say(`"${cfg.title}" is at its limit of ${cfg.maxConcurrent}. Clear some with !dtm or !ctm first.`);

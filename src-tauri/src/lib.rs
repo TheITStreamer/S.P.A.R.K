@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 use serde_json::{json, Value};
 use tauri::{Manager, State};
 
+pub mod audio;
 pub mod overlay;
 pub mod twitch;
 
@@ -930,6 +931,7 @@ pub fn run() {
             get_app_version,
             check_for_update,
             send_keypress,
+            audio::audio_play, audio::audio_stop, audio::audio_stop_all, audio::audio_beep,
             set_tool_visibility,
             set_master_border,
             save_wheel, wheel_overlay_update, wheel_overlay_spin,

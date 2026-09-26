@@ -1,6 +1,6 @@
 [package]
 name = "spark"
-version = "0.9.1"
+version = "0.9.2"
 description = "S.P.A.R.K. - Streaming Panel for Alerts, Redeems and Key tools"
 authors = ["SPARK"]
 edition = "2021"
@@ -28,6 +28,11 @@ tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 # 0.6 specifically: the Settings / Direction / Keyboard-trait API used in
 # send_keypress was verified against the 0.6.1 docs. Earlier versions differ.
 enigo = "0.6"
+# Native sound playback. Sounds play from spark.exe itself (not the webview's
+# msedgewebview2.exe helper) so OBS Application Audio Capture can hear them.
+# Pinned to 0.20: 0.21 rewrote the OutputStream API. Default features cover
+# WAV / OGG / FLAC / MP3; the two symphonia extras add M4A/AAC.
+rodio = { version = "0.20", features = ["symphonia-aac", "symphonia-isomp4"] }
 
 [profile.release]
 panic = "abort"
