@@ -3,6 +3,9 @@ Some things may be a little janky/not work properly.
 
 Streaming Panel for Alerts, Redeems and Key-tools. A Windows app for Twitch streamers. Everything will run locally on your PC.
 
+**Windows Defender notice:** Some builds of SPARK are flagged as
+`Trojan:Win32/Bearfoos.A!ml`. This is a machine-learning false positive. SPARK is open source and unsigned, and its keypress feature simulates keyboard input, which can look suspicious to Defender. It has been submitted to Microsoft for review. You can build it yourself from source to verify it.
+
 ## A.I Disclaimer
 I do not claim to be a programmer or having made this. Yes, I prompted Claude and reviewed, tested, self QA'd and tweaked. I knew
 what the outcomes should be and understand the issues enough to be able to redirect Claude to be able to fix as I do have an IT
