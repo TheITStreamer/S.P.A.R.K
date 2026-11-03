@@ -272,7 +272,7 @@ function buildLeft(){
       <div id="atLastRedeem">No redeem seen yet this session.</div>
     </div>
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line, var(--line))">
-      <div style="font-size:.75rem;color:var(--muted);font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px">Applies to all configs</div>
+      <div style="font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:8px">Applies to all configs</div>
       <label class="mt">Overall limit across every config</label>
       <input type="number" id="atOverallMax" min="0" max="99" style="width:90px">
       <div class="hint">Stops the combined total from burying your overlay, whichever redeem is busy. 0 means no limit.</div>
@@ -395,9 +395,10 @@ function wireAutoEvents(){
 
   renderConfigList();
   renderLastRedeem();
-  // The Settings tab owns the tool toggle and does not announce changes, so the
-  // status line re-reads it rather than trusting a value captured at boot.
-  setInterval(renderToolStatus, 2000);
+  // The Settings tab (and the disabled-tool banner's "Turn on" button) both
+  // announce enablement changes now, so the status line just listens instead
+  // of re-reading the setting on a timer.
+  window.addEventListener('spark-tool-availability-changed', renderToolStatus);
 }
 
 // ── Redeem diagnostics ────────────────────────────────────────────────────────
@@ -538,8 +539,10 @@ function renderConfigList(){
   }));
 }
 
+let closeTimerConfigEditor = null;
 function openConfigEditor(cfg){
   try{
+    if(closeTimerConfigEditor) closeTimerConfigEditor();
     document.getElementById('atEditorModal')?.remove();
     const modal=document.createElement('div');
     modal.id='atEditorModal';
@@ -550,7 +553,7 @@ function openConfigEditor(cfg){
     const btnG='font-family:inherit;cursor:pointer;border:1px solid var(--line);border-radius:8px;font-size:.85rem;padding:8px 14px;color:var(--muted);background:transparent';
     modal.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;width:560px;max-height:90vh;overflow-y:auto;position:relative">'
       +'<button id="atEdClose" style="position:absolute;top:12px;right:14px;background:none;border:none;color:var(--muted);font-size:1.5rem;cursor:pointer">x</button>'
-      +'<div style="font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:16px">Editing: '+esc(cfg.title||'')+'</div>'
+      +'<div style="font-size:.82rem;color:var(--muted);font-weight:600;margin-bottom:16px">Editing: '+esc(cfg.title||'')+'</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
         +'<div><label>Title</label><input id="atEdTitle" type="text" value="'+esc(cfg.title||'')+'"></div>'
         +'<div><label>Channel point reward</label><select id="atEdReward"><option value="'+esc(cfg.rewardId||'')+'">'+esc(cfg._rewardTitle||cfg.rewardId||'Loading...')+'</option></select></div>'
@@ -633,12 +636,21 @@ function openConfigEditor(cfg){
         t.cfgTitle=cfg.title; t.cfgColor=cfg.tagColor; t.nameTemplate=cfg.nameTemplate;
         t.hideWhenIdle=cfg.hideWhenIdle;
       });
-      modal.remove();
+      close();
       renderConfigList(); renderActiveList(); pushOverlay(); persist();
     });
-    document.getElementById('atEdClose').addEventListener('click',()=>modal.remove());
-    document.getElementById('atEdCancel').addEventListener('click',()=>modal.remove());
-    modal.addEventListener('click',e=>{ if(e.target===modal) modal.remove(); });
+    document.getElementById('atEdClose').addEventListener('click',close);
+    document.getElementById('atEdCancel').addEventListener('click',close);
+    modal.addEventListener('click',e=>{ if(e.target===modal) close(); });
+
+    function close(){
+      document.removeEventListener('keydown', onEsc);
+      modal.remove();
+      if(closeTimerConfigEditor===close) closeTimerConfigEditor=null;
+    }
+    function onEsc(e){ if(e.key==='Escape') close(); }
+    document.addEventListener('keydown', onEsc);
+    closeTimerConfigEditor = close;
   }catch(err){ console.error('openConfigEditor error:',err); }
 }
 

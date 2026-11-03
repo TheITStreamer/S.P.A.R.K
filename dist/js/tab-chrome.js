@@ -294,6 +294,10 @@ function turnActiveToolOn(){
   // Settings may already have rendered its checkbox list; tell it to redraw so
   // the two views cannot disagree.
   window.dispatchEvent(new CustomEvent('spark-tools-changed'));
+  // Lighter-weight signal for tabs that just want to know enablement changed
+  // (e.g. a status line), without forcing Settings' own list to redraw — see
+  // settings-tab.js's own tool-toggle handler for why those stay separate.
+  window.dispatchEvent(new CustomEvent('spark-tool-availability-changed'));
 }
 
 // ── Init ────────────────────────────────────────────────────────────────────

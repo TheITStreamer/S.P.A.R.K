@@ -56,7 +56,10 @@ async function afterConnected(){
 export async function initSettings(){
   const el=$('settContent'); if(!el) return;
   el.innerHTML=`
-  <h1 style="font-size:1rem;letter-spacing:.25em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:18px">⚙ Settings</h1>
+  <h1 style="display:flex;align-items:center;gap:8px;font-size:1.1rem;color:var(--muted);font-weight:600;margin-bottom:18px">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    Settings
+  </h1>
   <div class="settings-grid">
   <div class="card">
     <h2>About</h2>
@@ -560,6 +563,11 @@ function wireToolToggleEvents(){
     syncToolRowPill(cb.dataset.id);
     refreshDisabledBanner(); // the strip above #content reads the same toggles
     flash();
+    // Other tabs (e.g. Timers' own tool-status line) read this rather than
+    // polling. Deliberately NOT 'spark-tools-changed' — that one re-renders
+    // this very list, which would blow away a message box the streamer is
+    // mid-edit on in some OTHER row.
+    window.dispatchEvent(new CustomEvent('spark-tool-availability-changed'));
   });
 
   // The banner's "Turn on" button writes the same toggles from the other side.

@@ -220,8 +220,10 @@ function renderRightPreview(){
 }
 
 // ── Editor modal ──────────────────────────────────────────────────────────────
+let closeGoalEditor = null;
 function openEditor(bar){
   try{
+    if(closeGoalEditor) closeGoalEditor();
     document.getElementById('goEdModal')?.remove();
     const modal=document.createElement('div');
     modal.id='goEdModal';
@@ -242,7 +244,7 @@ function openEditor(bar){
     modal.innerHTML=`
     <div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;width:600px;max-height:92vh;overflow-y:auto;position:relative">
       <button id="goEdX" style="position:absolute;top:12px;right:14px;background:none;border:none;color:var(--muted);font-size:1.4rem;cursor:pointer">x</button>
-      <div style="font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:16px">Edit goal bar</div>
+      <div style="font-size:.82rem;color:var(--muted);font-weight:600;margin-bottom:16px">Edit goal bar</div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
         <div><label>Name</label><input id="ge-name" type="text" value="${esc(bar.name||'')}"></div>
@@ -287,11 +289,11 @@ function openEditor(bar){
       </div>
 
       <div style="background:var(--bg);border-radius:10px;padding:12px;margin-bottom:14px;text-align:center">
-        <div style="font-size:.7rem;color:var(--muted);margin-bottom:8px;letter-spacing:.1em;text-transform:uppercase">Preview</div>
+        <div style="font-size:.78rem;color:var(--muted);margin-bottom:8px">Preview</div>
         <canvas id="ge-prev" style="border-radius:8px;max-width:100%;max-height:200px;display:inline-block"></canvas>
       </div>
 
-      <div style="font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:8px">Milestones</div>
+      <div style="font-size:.8rem;color:var(--muted);font-weight:600;margin-bottom:8px">Milestones</div>
       <div id="ge-ms">${msHtml()}</div>
       <button class="btn-sm" id="ge-add-ms" style="margin-top:6px;margin-bottom:14px">+ Add Milestone</button>
 
@@ -408,14 +410,23 @@ function openEditor(bar){
       bar.currentMilestone = Math.max(0, Math.min(bar.currentMilestone, bar.milestones.length-1));
       if(bar.useChannelEmotes) fetchEmotes(bar);
       loadGoogleFont(bar.font);
-      modal.remove();
+      close();
       renderBarList();
       renderRightPreview();
       persist();
     });
-    document.getElementById('ge-cancel').addEventListener('click',()=>modal.remove());
-    document.getElementById('goEdX').addEventListener('click',()=>modal.remove());
-    modal.addEventListener('click',e=>{ if(e.target===modal) modal.remove(); });
+    document.getElementById('ge-cancel').addEventListener('click',close);
+    document.getElementById('goEdX').addEventListener('click',close);
+    modal.addEventListener('click',e=>{ if(e.target===modal) close(); });
+
+    function close(){
+      document.removeEventListener('keydown', onEsc);
+      modal.remove();
+      if(closeGoalEditor===close) closeGoalEditor=null;
+    }
+    function onEsc(e){ if(e.key==='Escape') close(); }
+    document.addEventListener('keydown', onEsc);
+    closeGoalEditor = close;
   }catch(err){ console.error('openEditor error:',err); }
 }
 

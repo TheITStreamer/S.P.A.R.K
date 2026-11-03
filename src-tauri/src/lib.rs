@@ -7,6 +7,7 @@ use tauri::{Manager, State};
 
 pub mod audio;
 pub mod overlay;
+pub mod token_store;
 pub mod twitch;
 
 // ── Persistent data ───────────────────────────────────────────────────────────
@@ -27,10 +28,15 @@ pub struct AppData {
     #[serde(default)] pub commands: Value,
     #[serde(default)] pub broadcast: Value,
     #[serde(default)] pub settings: Value,
-    #[serde(default)] pub twitch_tokens: Value,
+    // Tokens never touch spark-data.json at all — see the token_store module.
+    // `skip` means serde neither reads nor writes this field, so an in-memory
+    // default (Value::Null) is what a freshly-deserialized struct starts
+    // with; token_store::load() is what actually populates it, from the OS
+    // keychain, right after this is loaded (see run()'s setup()).
+    #[serde(skip)] pub twitch_tokens: Value,
     // Optional second account used only for SENDING chat. Never backed up,
     // same as the broadcaster's tokens.
-    #[serde(default)] pub bot_tokens: Value,
+    #[serde(skip)] pub bot_tokens: Value,
 }
 
 // One pending outbound message. The sender thread owns the pacing; callers
@@ -56,9 +62,12 @@ pub struct Shared {
     // Overlay event bus (all tools write here; overlay long-polls)
     pub overlay_seq:    AtomicU64,
     pub overlay_events: Mutex<VecDeque<(u64, String)>>,
-    // Wakes long-polling overlay connections the instant an event is pushed
-    pub overlay_wake_lock: Mutex<()>,
-    pub overlay_wake:      Condvar,
+    // Wakes long-polling overlay connections the instant an event is pushed.
+    // Waiters wait on overlay_events' own lock (see overlay.rs) rather than a
+    // separate one, specifically so the check-for-events and the wait are
+    // atomic with respect to the SAME lock a push uses — no gap for a
+    // notify_all() to land in while nobody is listening yet.
+    pub overlay_wake: Condvar,
     // Follower-status cache shared by every tool: user_id -> (is_follower, checked_at_secs)
     // Persisted to its own file (see follower_cache_path). It used to live in
     // settings, which meant every new chatter rewrote the ENTIRE data file,
@@ -105,6 +114,11 @@ pub struct Shared {
     pub master_border: Mutex<String>,
     // HTTP server port
     pub server_port: AtomicU64,
+    // Set once at boot if the overlay server landed on a different port than
+    // last launch (something else was already holding 4747, say). Lets the
+    // frontend warn that already-pasted OBS Browser Source URLs now point at
+    // the wrong port, instead of those sources just silently going dark.
+    pub overlay_port_prev: Mutex<Option<u16>>,
     // Twitch runtime
     pub twitch_running: AtomicBool,
     pub twitch_stop:    Arc<AtomicBool>,
@@ -751,6 +765,7 @@ fn credits_overlay_play(shared: State<Shared>, event: Value) {
 fn overlay_url(shared: State<Shared>) -> Value {
     let port = shared.server_port.load(Ordering::SeqCst);
     json!({
+        "portChangedFrom": *shared.overlay_port_prev.lock().unwrap(),
         "master":   format!("http://localhost:{}/", port),
         "wheel":    format!("http://localhost:{}/wheel", port),
         "giveaway": format!("http://localhost:{}/giveaway", port),
@@ -880,6 +895,12 @@ pub fn run() {
                 save_to_disk(&data_path, &data);
             }
 
+            // Twitch tokens: load from the OS keychain, lifting anything an
+            // older version left in spark-data.json itself. Runs after the
+            // migrations above since it does its own save_to_disk() when (and
+            // only when) there was something to migrate.
+            token_store::migrate(&data_path, &mut data);
+
             let stop  = Arc::new(AtomicBool::new(false));
             let cstop = Arc::new(AtomicBool::new(false));
             let shared = Shared {
@@ -887,7 +908,6 @@ pub fn run() {
                 data_path: Mutex::new(data_path),
                 overlay_seq:    AtomicU64::new(0),
                 overlay_events: Mutex::new(VecDeque::new()),
-                overlay_wake_lock: Mutex::new(()),
                 overlay_wake:      Condvar::new(),
                 follower_cache: Mutex::new(follower),
                 follower_dirty: AtomicBool::new(false),
@@ -910,6 +930,7 @@ pub fn run() {
                 tool_visibility:  Mutex::new(std::collections::HashMap::new()),
                 master_border:    Mutex::new("#ffc83d".into()),
                 server_port: AtomicU64::new(0),
+                overlay_port_prev: Mutex::new(None),
                 twitch_running: AtomicBool::new(false),
                 twitch_stop: stop,
                 chat_stop: cstop,

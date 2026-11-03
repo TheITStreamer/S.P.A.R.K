@@ -16,7 +16,7 @@ import { initReauth }     from './reauth.js';
 import { initFonts }      from './fonts.js';
 import { store, loadFollowerMirror } from './store.js';
 import { applyTheme }     from './theme.js';
-import { initTabChrome, refreshDisabledBanner, applySavedTabLayout } from './tab-chrome.js';
+import { initTabChrome, refreshDisabledBanner, applySavedTabLayout, selectTab } from './tab-chrome.js';
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -34,6 +34,56 @@ export function setHeaderStatus(state, msg){
   const text = document.getElementById('twStatusHeader');
   dot.className  = 'dot' + (state ? ' '+state : '');
   text.textContent = msg;
+}
+
+// ── First-run Twitch connect banner ───────────────────────────────────────────
+// Almost everything in SPARK is inert until Twitch is connected, but the only
+// sign of that otherwise is a small "Not connected" line in the header corner
+// — easy to miss on a first launch when nothing else points there. This is
+// deliberately separate from the reauth modal (settings-tab.js/reauth.js),
+// which is about an EXISTING connection missing a newly added scope; this one
+// is for "never connected at all" and goes away for good once that changes.
+let connectBannerDismissed = false;
+function updateConnectBanner(){
+  const banner = document.getElementById('twConnectBanner');
+  if(!banner) return;
+  // A saved token means "don't flash the first-run banner while it's still
+  // being validated" — store.twitch.connected only flips true once that
+  // round trip to Twitch finishes, a moment after boot for a returning user.
+  const hasSavedToken = !!(store.twitch_tokens && store.twitch_tokens.access_token);
+  const neverConnected = !hasSavedToken && !store.twitch.connected;
+  banner.classList.toggle('on', neverConnected && !connectBannerDismissed);
+}
+function initConnectBanner(){
+  const go = document.getElementById('twConnectBannerGo');
+  const x  = document.getElementById('twConnectBannerX');
+  if(go) go.addEventListener('click', () => {
+    selectTab('settings');
+    // Draw the eye to the field they actually need to fill in next, same as
+    // the reauth modal's "Reconnect now" leaves the tab ready to act on.
+    const cid = document.getElementById('settTwClientId');
+    if(cid) setTimeout(() => cid.focus(), 60);
+  });
+  if(x) x.addEventListener('click', () => {
+    connectBannerDismissed = true;
+    updateConnectBanner();
+  });
+  window.addEventListener('spark-twitch-status', updateConnectBanner);
+  updateConnectBanner();
+}
+
+// ── Overlay port-change banner ────────────────────────────────────────────────
+// overlay_url() flags this once, at boot, when overlay.rs landed on a
+// different port than last launch. Shown once per session — there is nothing
+// more to detect after the one comparison Rust already made.
+function showOverlayPortBanner(fromPort, toPort){
+  const banner = document.getElementById('overlayPortBanner');
+  if(!banner) return;
+  banner.querySelector('.msg').innerHTML =
+    `Overlay server moved from port <b>${fromPort}</b> to <b>${toPort}</b> — Browser Sources already pasted into OBS now point at the wrong address. Re-copy the Overlay URL from each tab you use.`;
+  banner.classList.add('on');
+  const x = document.getElementById('overlayPortBannerX');
+  if(x) x.addEventListener('click', () => banner.classList.remove('on'));
 }
 
 // ── Help System ───────────────────────────────────────────────────────────────
@@ -649,6 +699,7 @@ async function boot(){
   store.broadcast   = data.broadcast   || {};
   store.settings    = data.settings    || {};
   store.twitch_tokens = data.twitch_tokens || {};
+  initConnectBanner();
 
   // Settings is the source of truth for the theme. The <head> script has
   // already applied a cached copy to avoid a flash; this corrects it if the
@@ -671,6 +722,7 @@ async function boot(){
 
   const urls = await invoke('overlay_url');
   store.overlayUrls = urls;
+  if(urls.portChangedFrom != null) showOverlayPortBanner(urls.portChangedFrom, Number(new URL(urls.master).port));
 
   // Fonts before any tab renders: built-in families load once for the whole app
   // instead of each tab requesting its own overlapping Google stylesheet, and

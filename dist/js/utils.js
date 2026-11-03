@@ -1,3 +1,5 @@
+import { selectTab } from './tab-chrome.js';
+
 export const $ = id => document.getElementById(id);
 export const esc = s => (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
@@ -27,12 +29,23 @@ export function fmtTime(secs){
 }
 
 // Every tab shows its own unique URL. Master-overlay membership is configured
-// in Settings (Master Overlay card), not per-tab.
+// in Settings (Master Overlay card), not per-tab — which otherwise means that
+// card is the only place in the whole app that ever mentions the feature
+// exists. The small link below fixes that without duplicating the card's own
+// per-tool eligibility list here.
 export function renderOverlayBar(modeSelId, urlInputId, copyBtnId, tool, urls){
   const inp = $(urlInputId), btn = $(copyBtnId);
   if(!inp||!btn) return;
   inp.value = urls[tool]||'';
   btn.addEventListener('click', ()=>navigator.clipboard.writeText(inp.value));
+
+  const bar = inp.closest('.overlay-bar');
+  if(bar && !bar.querySelector('.ov-master-hint')){
+    const hint = el('span', 'link ov-master-hint', 'Master Overlay');
+    hint.title = 'Show several tools on one OBS source — configure in Settings';
+    hint.addEventListener('click', ()=>selectTab('settings'));
+    bar.appendChild(hint);
+  }
 }
 
 // ── Safe diagnostic logging ───────────────────────────────────────────────────

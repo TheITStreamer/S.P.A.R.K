@@ -113,7 +113,7 @@ function renderWinnerHistory(){
   const el=$('gaWinnerHistory'); if(!el) return;
   if(!winners.length){ el.innerHTML=''; return; }
   const t=(ms)=>{ const d=new Date(ms); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); };
-  el.innerHTML='<div class="hint" style="margin-top:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;font-size:.7rem">Winners this session</div>'
+  el.innerHTML='<div class="hint" style="margin-top:10px;font-weight:600;font-size:.78rem">Winners this session</div>'
     + winners.map(w=>`<div style="display:flex;gap:8px;font-size:.82rem;padding:2px 0"><span class="tag">${t(w.at)}</span><span>${esc(w.name)}</span></div>`).join('');
 }
 

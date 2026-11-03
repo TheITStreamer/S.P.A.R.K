@@ -126,9 +126,9 @@ body.side-collapsed #tabs{width:52px}
 
 .tab{
   display:flex;align-items:center;gap:10px;
-  padding:9px 14px;cursor:pointer;font-size:.76rem;font-weight:700;
+  padding:9px 14px;cursor:pointer;font-size:.82rem;font-weight:600;
   color:var(--muted);border-left:3px solid transparent;
-  letter-spacing:.04em;text-transform:uppercase;
+  letter-spacing:.01em;
   transition:color .15s,border-color .15s,background .15s;user-select:none;
   white-space:nowrap;flex-shrink:0;
 }
@@ -149,8 +149,8 @@ body.tab-dragging{cursor:grabbing;user-select:none}
   margin-top:auto;flex-shrink:0;
   display:flex;align-items:center;gap:10px;
   padding:9px 14px;background:none;border:none;border-top:1px solid var(--line);
-  color:var(--muted);font-family:inherit;font-size:.7rem;font-weight:700;
-  letter-spacing:.04em;text-transform:uppercase;cursor:pointer;
+  color:var(--muted);font-family:inherit;font-size:.76rem;font-weight:600;
+  letter-spacing:.01em;cursor:pointer;
   border-radius:0;transition:color .15s,background .15s;
 }
 #sideCollapse:hover{color:var(--ink);background:var(--shade);transform:none;filter:none}
@@ -179,7 +179,7 @@ body.side-collapsed #sideCollapse .chev{transform:rotate(180deg)}
   padding:16px 20px 12px;border-bottom:1px solid var(--line);
 }
 #wnTitle{
-  font-size:.72rem;font-weight:800;letter-spacing:.2em;text-transform:uppercase;
+  font-size:.82rem;font-weight:600;letter-spacing:.01em;
   color:var(--gold-ink);display:flex;align-items:center;gap:8px;
 }
 #wnTitle svg{width:15px;height:15px;opacity:.9}
@@ -190,8 +190,8 @@ body.side-collapsed #sideCollapse .chev{transform:rotate(180deg)}
 #wnClose:hover{color:var(--ink);transform:none;filter:none}
 #wnBody{overflow-y:auto;padding:16px 20px;font-size:.85rem;line-height:1.6;color:var(--muted)}
 #wnBody h3{
-  font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--gold-ink);
-  font-weight:800;margin:18px 0 8px;
+  font-size:.82rem;letter-spacing:0;color:var(--gold-ink);
+  font-weight:600;margin:18px 0 8px;
 }
 #wnBody h3:first-child{margin-top:0}
 #wnBody p{margin-bottom:9px}
@@ -244,8 +244,7 @@ body.side-collapsed #sideCollapse .chev{transform:rotate(180deg)}
 #tabDisabledBanner .msg b{font-weight:700}
 #tabDisabledBannerOn{
   flex-shrink:0;padding:4px 12px;border-radius:5px;cursor:pointer;
-  font:inherit;font-size:.75rem;font-weight:700;letter-spacing:.03em;
-  text-transform:uppercase;
+  font:inherit;font-size:.78rem;font-weight:600;
   background:var(--gold);color:var(--on-gold);border:0;
 }
 #tabDisabledBannerOn:hover{filter:brightness(1.08)}
@@ -255,6 +254,55 @@ body.side-collapsed #sideCollapse .chev{transform:rotate(180deg)}
   font-size:.62rem;font-weight:800;letter-spacing:.08em;vertical-align:middle;
   background:var(--warn-bg);color:var(--warn-ink);
 }
+
+/* ── First-run Twitch connect banner ────────────────────────────────────────
+   Shown until Twitch is connected at all, separate from the reauth modal
+   (which is about an EXISTING connection missing a newly added scope). Gold,
+   not warn-colored, like the banner above it — this isn't an error, it's the
+   one thing the app actually needs before redeems, chat tools and overlays
+   do anything. Sits in the same spot for the same reason. */
+#twConnectBanner{
+  display:none;align-items:center;gap:10px;flex-shrink:0;
+  padding:8px 16px;font-size:.8rem;
+  background:var(--shade2);color:var(--ink);
+  border-bottom:1px solid var(--line);
+}
+#twConnectBanner.on{display:flex}
+#twConnectBanner svg{width:15px;height:15px;flex-shrink:0;color:var(--gold-ink)}
+#twConnectBanner .msg{flex:1;min-width:0}
+#twConnectBannerGo{
+  flex-shrink:0;padding:4px 12px;border-radius:5px;cursor:pointer;
+  font:inherit;font-size:.78rem;font-weight:600;
+  background:var(--gold);color:var(--on-gold);border:0;
+}
+#twConnectBannerGo:hover{filter:brightness(1.08)}
+#twConnectBannerX{
+  flex-shrink:0;background:transparent;border:none;color:var(--muted);
+  font-size:1rem;line-height:1;padding:0 2px;cursor:pointer;transition:color .15s;
+}
+#twConnectBannerX:hover{color:var(--ink);transform:none;filter:none}
+
+/* ── Overlay port-change banner ─────────────────────────────────────────────
+   The overlay server picks the first free port from 4747 up (overlay.rs);
+   something else holding 4747 at launch means every OBS Browser Source the
+   streamer already pasted now points at the wrong port, with nothing else in
+   the app saying so — they'd just see dead overlays. Warn-colored like the
+   disabled-tool banner: this one genuinely needs action, re-copying URLs. */
+#overlayPortBanner{
+  display:none;align-items:center;gap:10px;flex-shrink:0;
+  padding:8px 16px;font-size:.8rem;
+  background:var(--warn-bg);color:var(--warn-ink);
+  border-bottom:1px solid var(--line);
+}
+#overlayPortBanner.on{display:flex}
+#overlayPortBanner svg{width:15px;height:15px;flex-shrink:0}
+#overlayPortBanner .msg{flex:1;min-width:0}
+#overlayPortBanner .msg b{font-weight:700}
+#overlayPortBannerX{
+  flex-shrink:0;background:transparent;border:none;color:var(--warn-ink);
+  font-size:1rem;line-height:1;padding:0 2px;cursor:pointer;opacity:.75;transition:opacity .15s;
+}
+#overlayPortBannerX:hover{opacity:1;transform:none;filter:none}
 
 /* Content */
 #content{flex:1;overflow:hidden;display:flex}
@@ -273,7 +321,7 @@ body.side-collapsed #sideCollapse .chev{transform:rotate(180deg)}
 
 /* Cards */
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
-.card h2{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.card h2{font-size:.84rem;letter-spacing:0;color:var(--muted);font-weight:600;margin-bottom:10px;display:flex;align-items:center;gap:8px}
 
 /* Forms */
 label{display:block;color:var(--muted);font-size:.8rem;margin-bottom:5px}
@@ -320,8 +368,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:.82rem;margin-bottom
 .help-btn{
   display:inline-flex;align-items:center;gap:6px;
   background:transparent;border:1px solid var(--line);color:var(--muted);
-  font-size:.75rem;font-weight:600;padding:5px 10px;border-radius:7px;
-  letter-spacing:.06em;text-transform:uppercase;
+  font-size:.78rem;font-weight:600;padding:5px 10px;border-radius:7px;
   transition:color .15s,border-color .15s;
 }
 .help-btn:hover{color:var(--ink);border-color:var(--muted);transform:none;filter:none}
@@ -343,7 +390,7 @@ details summary{cursor:pointer;color:var(--muted);font-size:.82rem;margin-bottom
   padding:16px 20px 12px;border-bottom:1px solid var(--line);flex-shrink:0;
 }
 #helpBoxTitle{
-  font-size:.72rem;font-weight:800;letter-spacing:.2em;text-transform:uppercase;
+  font-size:.82rem;font-weight:600;letter-spacing:.01em;
   color:var(--gold-ink);display:flex;align-items:center;gap:8px;
 }
 #helpBoxTitle svg{width:15px;height:15px;opacity:.8}
@@ -357,8 +404,8 @@ details summary{cursor:pointer;color:var(--muted);font-size:.82rem;margin-bottom
   color:var(--ink);
 }
 #helpBoxBody h3{
-  font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);
-  font-weight:700;margin:16px 0 7px;
+  font-size:.82rem;letter-spacing:0;color:var(--muted);
+  font-weight:600;margin:16px 0 7px;
 }
 #helpBoxBody h3:first-child{margin-top:0}
 #helpBoxBody p{margin-bottom:8px;color:var(--muted)}
@@ -394,7 +441,7 @@ body.bc-dragging{cursor:row-resize;user-select:none}
 .bc-sec-head{
   display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;
   padding:10px 14px;
-  font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;
+  font-size:.84rem;color:var(--muted);font-weight:600;
 }
 .bc-sec-head:hover{color:var(--ink)}
 .bc-sec-head .bc-arrow{
@@ -415,7 +462,7 @@ body.bc-dragging{cursor:row-resize;user-select:none}
 .bc-chat-head{
   flex-shrink:0;display:flex;align-items:center;gap:8px;
   padding:10px 14px 8px;border-bottom:1px solid var(--line);
-  font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;
+  font-size:.84rem;color:var(--muted);font-weight:600;
 }
 .bc-chat-log{flex:1;overflow-y:auto;padding:6px 8px;min-height:0}
 .bc-chat-foot{flex-shrink:0;padding:8px 10px;border-top:1px solid var(--line);display:flex;gap:6px}
@@ -475,7 +522,7 @@ body.bc-dragging{cursor:row-resize;user-select:none}
   padding:16px 20px 12px;border-bottom:1px solid var(--line);flex-shrink:0;
 }
 #reauthTitle{
-  font-size:.72rem;font-weight:800;letter-spacing:.2em;text-transform:uppercase;
+  font-size:.82rem;font-weight:600;letter-spacing:.01em;
   color:#ffc83d;display:flex;align-items:center;gap:8px;
 }
 #reauthTitle svg{width:15px;height:15px;opacity:.9}
@@ -509,11 +556,12 @@ body.bc-dragging{cursor:row-resize;user-select:none}
 /* Overlay bar */
 .overlay-bar{position:absolute;bottom:12px;left:0;right:0;display:flex;justify-content:center;gap:8px;align-items:center;font-size:.75rem;color:var(--muted)}
 .overlay-bar input{width:210px;font-size:.75rem;background:var(--code-bg)}
+.overlay-bar .ov-master-hint{margin-left:4px;font-size:.75rem}
 .overlay-toggle{display:flex;gap:6px;align-items:center;font-size:.75rem;color:var(--muted)}
 .overlay-toggle select{width:auto;font-size:.75rem;padding:4px 8px}
 
 /* Preview right column header */
-.preview-header{font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:16px;align-self:flex-start}
+.preview-header{font-size:.84rem;color:var(--muted);font-weight:600;margin-bottom:16px;align-self:flex-start}
 
 /* Wheel */
 #wheelWinner{font-size:2rem;font-weight:800;color:var(--gold-ink);text-align:center;font-family:Georgia,serif;min-height:56px;display:flex;align-items:center;justify-content:center;margin-bottom:8px}
@@ -521,7 +569,7 @@ body.bc-dragging{cursor:row-resize;user-select:none}
 #wPointer{position:absolute;left:50%;transform:translateX(-50%);width:0;height:0;border-left:16px solid transparent;border-right:16px solid transparent;border-top:26px solid var(--gold);filter:drop-shadow(0 3px 4px rgba(0,0,0,.5));z-index:2}
 .wheel-wrap{position:relative}
 #wCanvas{display:block;filter:drop-shadow(0 12px 30px rgba(0,0,0,.55))}
-#wSpinBtn{margin-top:16px;background:var(--accent);font-size:1.1rem;padding:11px 38px;border-radius:999px;box-shadow:0 6px 20px rgba(255,93,115,.4);font-family:Georgia,serif;font-weight:700}
+#wSpinBtn{margin-top:16px;background:var(--accent);font-size:1.1rem;padding:11px 38px;border-radius:999px;box-shadow:0 6px 16px rgba(0,0,0,.35);font-family:Georgia,serif;font-weight:700}
 
 /* Item list */
 .item-row{display:flex;align-items:center;gap:7px;padding:5px 0;border-bottom:1px solid var(--row-line)}
@@ -547,7 +595,7 @@ body.bc-dragging{cursor:row-resize;user-select:none}
 
 /* Giveaway preview */
 #gaPreview{width:100%;max-width:440px;background:var(--sunken);border:1px solid var(--line);border-radius:14px;padding:20px;text-align:center}
-#gaPreviewStatus{font-size:.75rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
+#gaPreviewStatus{font-size:.8rem;color:var(--muted);margin-bottom:12px}
 #gaPreviewCount{font-size:3rem;font-weight:800;color:var(--gold-ink);font-family:Georgia,serif;line-height:1}
 #gaPreviewLabel{font-size:.85rem;color:var(--muted);margin-top:4px}
 #gaPreviewWinner{font-size:1.4rem;font-weight:800;color:var(--gold-ink);margin-top:16px;min-height:40px;font-family:Georgia,serif}
@@ -555,7 +603,7 @@ body.bc-dragging{cursor:row-resize;user-select:none}
 /* Timers preview */
 #tmPreview{width:100%;max-width:360px;display:flex;flex-direction:column;gap:12px}
 .tm-preview-card{background:var(--sunken);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
-.tm-preview-name{font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.tm-preview-name{font-size:.78rem;color:var(--muted);margin-bottom:4px}
 .tm-preview-time{font-size:2.8rem;font-weight:700;line-height:1;color:var(--gold-ink)}
 .tm-preview-state{font-size:.72rem;color:var(--muted);margin-top:4px}
 
@@ -671,6 +719,19 @@ button.del{background:var(--warn-bg)}
   <button id="tabDisabledBannerOn" type="button">Turn on</button>
 </div>
 
+<div id="twConnectBanner">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+  <span class="msg">Connect your Twitch account to turn on redeems, chat tools and overlays.</span>
+  <button id="twConnectBannerGo" type="button">Connect Twitch</button>
+  <button id="twConnectBannerX" type="button" title="Dismiss for now">&#x2715;</button>
+</div>
+
+<div id="overlayPortBanner">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+  <span class="msg"></span>
+  <button id="overlayPortBannerX" type="button" title="Dismiss">&#x2715;</button>
+</div>
+
 <div id="content">
 
   <!-- WHEEL -->
@@ -747,7 +808,7 @@ button.del{background:var(--warn-bg)}
       <div class="right-col">
         <div class="preview-header">Live Preview</div>
         <div id="pomoPreviewWrap">
-          <div style="font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;font-weight:700">🍅 Pomodoro</div>
+          <div style="font-size:.84rem;color:var(--muted);margin-bottom:6px;font-weight:600">Pomodoro</div>
           <div id="pomoPreviewBox" style="margin-bottom:14px"></div>
           <div style="display:flex;justify-content:center;gap:8px;align-items:center;font-size:.75rem;color:var(--muted);margin-bottom:14px">
             <span>Pomodoro URL:</span><input type="text" id="pomoOverlayUrl" readonly style="width:200px;font-size:.75rem;background:#0d0a1e">
@@ -755,7 +816,7 @@ button.del{background:var(--warn-bg)}
           </div>
         </div>
         <div id="tkPreview">
-          <div style="font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;font-weight:700">Stream Tasks</div>
+          <div style="font-size:.84rem;color:var(--muted);margin-bottom:8px;font-weight:600">Stream Tasks</div>
           <div id="tkPreviewList"><div class="hint">No tasks yet.</div></div>
         </div>
         <div class="overlay-bar">

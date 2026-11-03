@@ -38,6 +38,7 @@ pub fn start_server(app: tauri::AppHandle) {
         }
         let server = match server { Some(s) => s, None => return };
         app.state::<Shared>().server_port.store(chosen as u64, Ordering::SeqCst);
+        note_port_change(&app, chosen);
         let server = std::sync::Arc::new(server);
         // 16 workers: each long-poll (/events) can hold a worker for up to 25s,
         // and master + per-tool overlays + several D.I.Y widgets easily exceed a
@@ -58,6 +59,25 @@ pub fn start_server(app: tauri::AppHandle) {
         }
         for w in workers { let _ = w.join(); }
     });
+}
+
+// Remembers the chosen port in its own small file (next to spark-data.json,
+// same pattern as follower-cache.json) and flags Shared when it differs from
+// last time. A single u16 doesn't need its own migration story or a place in
+// AppData — it's Rust-internal bookkeeping, not something any tab owns or
+// round-trips through save_app_settings.
+fn note_port_change(app: &tauri::AppHandle, chosen: u16) {
+    let dir = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let path = dir.join("overlay-port.txt");
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        if let Ok(prev) = s.trim().parse::<u16>() {
+            if prev != chosen {
+                *app.state::<Shared>().overlay_port_prev.lock().unwrap() = Some(prev);
+            }
+        }
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(&path, chosen.to_string());
 }
 
 // Overlay pages. OBS loads these as a browser source by navigating to them,
@@ -163,25 +183,42 @@ fn handle(app: &tauri::AppHandle, request: tiny_http::Request) {
 
         let deadline = Instant::now() + Duration::from_secs(25);
         let body;
+        // Checking "anything new?" and waiting on the condvar used to use TWO
+        // different locks (this one for the check, a separate dummy
+        // overlay_wake_lock for the wait) with a gap between them. A push
+        // landing — and calling notify_all() — in that gap woke no one, since
+        // nothing was waiting on the condvar yet; the waiter then slept out
+        // the rest of its window (up to 5s) before its next timeout-driven
+        // recheck finally noticed the event. That's what produced the
+        // inconsistent multi-second visual lag (audio never went through this
+        // path, so it was never affected). Holding ONE lock continuously
+        // across both the check and the wait closes that gap: wait_timeout
+        // atomically releases this lock and starts waiting as a single step,
+        // so a push's notify_all() can never fire into a moment where nobody
+        // is listening.
+        let mut q = shared.overlay_events.lock().unwrap();
         loop {
-            let (events, snapshot, latest) = {
-                let q = shared.overlay_events.lock().unwrap();
-                let latest = shared.overlay_seq.load(Ordering::SeqCst);
-                let evs: Vec<serde_json::Value> = q.iter()
-                    .filter(|(id, _)| *id > since)
-                    .filter(|(_, payload)| {
-                        if let Some(ref tf) = tool_filter {
-                            if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
-                                return v.get("_tool").and_then(|x| x.as_str()).unwrap_or("") == tf;
-                            }
+            let latest = shared.overlay_seq.load(Ordering::SeqCst);
+            let events: Vec<serde_json::Value> = q.iter()
+                .filter(|(id, _)| *id > since)
+                .filter(|(_, payload)| {
+                    if let Some(ref tf) = tool_filter {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+                            return v.get("_tool").and_then(|x| x.as_str()).unwrap_or("") == tf;
                         }
-                        true
-                    })
-                    .map(|(_, payload)| serde_json::from_str(payload).unwrap_or(serde_json::json!({})))
-                    .collect();
+                    }
+                    true
+                })
+                .map(|(_, payload)| serde_json::from_str(payload).unwrap_or(serde_json::json!({})))
+                .collect();
 
-                // build snapshot for first connect
-                let snap = if since == 0 {
+            let now = Instant::now();
+            if !events.is_empty() || since == 0 || now >= deadline {
+                // Drop the events lock before taking any snapshot locks below —
+                // they're independent mutexes with no other ordering
+                // established against this one, so there's no reason to nest.
+                drop(q);
+                let snapshot = if since == 0 {
                     let tool = tool_filter.as_deref().unwrap_or("master");
                     match tool {
                         "wheel"    => shared.overlay_wheel.lock().unwrap().clone(),
@@ -202,11 +239,6 @@ fn handle(app: &tauri::AppHandle, request: tiny_http::Request) {
                         }
                     }
                 } else { String::new() };
-                (evs, snap, latest)
-            };
-
-            let now = Instant::now();
-            if !events.is_empty() || since == 0 || now >= deadline {
                 let snap_val: serde_json::Value = if !snapshot.is_empty() {
                     serde_json::from_str(&snapshot).unwrap_or(serde_json::Value::Null)
                 } else { serde_json::Value::Null };
@@ -217,11 +249,9 @@ fn handle(app: &tauri::AppHandle, request: tiny_http::Request) {
                 }).to_string();
                 break;
             }
-            // Block until a new event is pushed (condvar notify) or the deadline
-            // passes. Spurious wakeups just re-check.
+            // Spurious wakeups just loop back and recheck.
             let wait = (deadline - now).min(Duration::from_secs(5));
-            let guard = shared.overlay_wake_lock.lock().unwrap();
-            let _ = shared.overlay_wake.wait_timeout(guard, wait).unwrap();
+            q = shared.overlay_wake.wait_timeout(q, wait).unwrap().0;
         }
         json_resp(request, body);
         return;

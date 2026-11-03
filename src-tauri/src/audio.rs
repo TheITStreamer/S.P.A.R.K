@@ -20,7 +20,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use rodio::source::SineWave;
+use rodio::source::{Buffered, SineWave};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 
 enum Cmd {
@@ -44,6 +44,48 @@ struct Playing {
     looped: bool,
 }
 
+// A fully-decoded, replayable clip. `Buffered` is `Clone` (that's the whole
+// reason `.buffered()` exists — `repeat_infinite()` needs a `Clone` source),
+// and cloning it is cheap: it shares the already-decoded samples rather than
+// copying them, so handing out another play of a cached clip costs nothing
+// but a fresh read cursor.
+type DecodedClip = Buffered<Decoder<BufReader<File>>>;
+
+// Redeem/chat/alert sounds often fire the same file dozens of times an hour;
+// re-opening and re-decoding it from disk on every single play was wasted
+// CPU and I/O. Keyed on path + mtime so replacing the file at the same path
+// (picking a different sound in Settings, or just overwriting it) is picked
+// up on the next play rather than replaying stale audio from the cache.
+struct ClipCache(HashMap<String, (std::time::SystemTime, DecodedClip)>);
+
+impl ClipCache {
+    fn new() -> Self { Self(HashMap::new()) }
+
+    fn get_or_decode(&mut self, path: &str) -> Result<DecodedClip, String> {
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        if let Some(mtime) = mtime {
+            if let Some((cached_mtime, clip)) = self.0.get(path) {
+                if *cached_mtime == mtime { return Ok(clip.clone()); }
+            }
+        }
+
+        let file = File::open(path).map_err(|e| format!("Can't open sound file \"{path}\": {e}"))?;
+        let decoder = Decoder::new(BufReader::new(file))
+            .map_err(|e| format!("Can't play \"{path}\" — unsupported or damaged file ({e}). Use MP3, WAV, OGG, FLAC or M4A."))?;
+        let clip = decoder.buffered();
+
+        // Real setups have a few dozen sound files at most (timers, redeems,
+        // commands, DIY alerts); this is just a backstop against the cache
+        // growing without bound if something unusual churns through many
+        // different paths. Simplest safe thing: drop everything and start
+        // over rather than track per-entry recency for a case that shouldn't
+        // happen in practice.
+        if self.0.len() >= 64 { self.0.clear(); }
+        if let Some(mtime) = mtime { self.0.insert(path.to_string(), (mtime, clip.clone())); }
+        Ok(clip)
+    }
+}
+
 static TX: OnceLock<Mutex<Sender<Cmd>>> = OnceLock::new();
 
 fn send(cmd: Cmd) -> Result<(), String> {
@@ -64,6 +106,7 @@ fn audio_thread(rx: Receiver<Cmd>) {
     let mut out: Option<(OutputStream, OutputStreamHandle)> = None;
     let mut playing: HashMap<u64, Playing> = HashMap::new();
     let mut next_id: u64 = 1;
+    let mut clips = ClipCache::new();
 
     for cmd in rx {
         // Forget clips that have finished on their own.
@@ -71,7 +114,7 @@ fn audio_thread(rx: Receiver<Cmd>) {
 
         match cmd {
             Cmd::Play { path, volume, looped, force, max, reply } => {
-                let r = play(&mut out, &mut playing, &mut next_id, &path, volume, looped, force, max);
+                let r = play(&mut out, &mut playing, &mut clips, &mut next_id, &path, volume, looped, force, max);
                 let _ = reply.send(r);
             }
             Cmd::Beep { reply } => {
@@ -106,6 +149,7 @@ fn handle(out: &mut Option<(OutputStream, OutputStreamHandle)>) -> Result<Output
 fn play(
     out: &mut Option<(OutputStream, OutputStreamHandle)>,
     playing: &mut HashMap<u64, Playing>,
+    clips: &mut ClipCache,
     next_id: &mut u64,
     path: &str,
     volume: f32,
@@ -122,9 +166,7 @@ fn play(
         }
     }
 
-    let file = File::open(path).map_err(|e| format!("Can't open sound file \"{path}\": {e}"))?;
-    let decoder = Decoder::new(BufReader::new(file))
-        .map_err(|e| format!("Can't play \"{path}\" — unsupported or damaged file ({e}). Use MP3, WAV, OGG, FLAC or M4A."))?;
+    let clip = clips.get_or_decode(path)?;
 
     let h = handle(out)?;
     let sink = Sink::try_new(&h).map_err(|e| {
@@ -135,9 +177,9 @@ fn play(
     })?;
     sink.set_volume(volume.clamp(0.0, 1.0));
     if looped {
-        sink.append(decoder.buffered().repeat_infinite());
+        sink.append(clip.repeat_infinite());
     } else {
-        sink.append(decoder);
+        sink.append(clip);
     }
 
     let id = *next_id;

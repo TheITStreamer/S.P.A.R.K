@@ -393,7 +393,9 @@ function buildStarter(s){
 // Pick what you want rather than getting all nine. Anything whose name is
 // already taken is shown but not selectable, with the reason, so it is obvious
 // why it isn't on offer instead of it silently not appearing.
+let closeStarterPicker = null;
 function openStarterPicker(){
+  if(closeStarterPicker) closeStarterPicker();
   document.getElementById('cmdStarterModal')?.remove();
 
   const rows = STARTER_PACK.map(s => ({ s, clash: commandConflict(s.name, null) }));
@@ -404,7 +406,7 @@ function openStarterPicker(){
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;display:flex;align-items:center;justify-content:center';
   modal.innerHTML = `<div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;width:620px;max-height:88vh;overflow-y:auto;position:relative">
     <button id="cmdStarterClose" style="position:absolute;top:12px;right:14px;background:none;border:none;color:var(--muted);font-size:1.5rem;cursor:pointer">×</button>
-    <div style="font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:6px">Starter commands</div>
+    <div style="font-size:.82rem;color:var(--muted);font-weight:600;margin-bottom:6px">Starter commands</div>
     <div class="hint" style="margin:0 0 14px">Tick the ones you want. You can edit any of them afterwards.</div>
 
     <div class="row" style="gap:8px;margin-bottom:10px">
@@ -446,7 +448,14 @@ function openStarterPicker(){
   boxes().forEach(b => b.addEventListener('change', updateCount));
   updateCount();
 
-  const close = () => modal.remove();
+  const close = () => {
+    document.removeEventListener('keydown', onEsc);
+    modal.remove();
+    if(closeStarterPicker===close) closeStarterPicker=null;
+  };
+  const onEsc = e => { if(e.key==='Escape') close(); };
+  document.addEventListener('keydown', onEsc);
+  closeStarterPicker = close;
   modal.querySelector('#cmdStarterClose').addEventListener('click', close);
   modal.querySelector('#cmdStarterCancel').addEventListener('click', close);
   modal.addEventListener('click', e => { if(e.target === modal) close(); });
@@ -1544,7 +1553,7 @@ function varHelpHtml(){
       </div>
 
       ${VAR_GROUPS.map(grp => `
-        <div style="font-size:.7rem;letter-spacing:.15em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:16px 0 6px">${esc(grp.g)}</div>
+        <div style="font-size:.8rem;color:var(--muted);font-weight:600;margin:16px 0 6px">${esc(grp.g)}</div>
         <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;font-size:.82rem;align-items:baseline">
           ${grp.vars.map(v => `
             <code style="white-space:nowrap">${esc(v.k)}</code>

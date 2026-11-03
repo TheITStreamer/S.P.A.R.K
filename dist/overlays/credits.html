@@ -228,9 +228,10 @@ setTool('credits');
 on('_snapshot', snap => {
   if(!snap || !snap.cfg) return;
   applySettings(snap.cfg, snap.roster);
-  // Autoplay only fires on the initial page load/snapshot (e.g. OBS scene
-  // switch reloading this browser source) — never on a later live settings tweak.
-  if(cfg.scroll.autoplay && !isPreview){
+  // Always plays on the initial page load/snapshot (e.g. OBS scene switch
+  // reloading this browser source) — never on a later live settings tweak,
+  // and never for the in-app preview iframe (that's driven by postMessage).
+  if(!isPreview){
     setTimeout(()=>playRoster({ roster:lastRoster, layout:cfg.layout, scroll:cfg.scroll }), 400);
   }
 });

@@ -138,6 +138,11 @@ async function tryConnect() {
     return true;
   } catch (e) {
     slog('pear', 'connect failed: ' + (e && e.message));
+    // Was previously only set from the manual "Connect" button's own catch —
+    // the automatic attempt at tab init failed the exact same way but left
+    // the status dot on its generic default, so a streamer who opened this
+    // tab with Pear not running just saw requests silently never resolve.
+    setPearStatus('err', 'Cannot reach Pear Desktop. Is it running with API Server enabled (auth: None)?');
     return false;
   }
 }
@@ -583,11 +588,24 @@ function extractVideoId(url) {
   return null;
 }
 
+// YouTube Music's own "Songs" search filter (the same params value YTM's web
+// client and ytmusicapi send for filter=songs). Unfiltered, Pear's /search
+// returns a "Top result" card first, and YTM picks that card by whatever's
+// most popular for the query text — an album wins over a same-named track
+// (e.g. Jon Bellion's "Father Figure" album vs. his song of the same name),
+// and the card's play button carries the ALBUM's first track's videoId. Our
+// old code grabbed the first "videoId" anywhere in the response, i.e. that
+// card, regardless of whether it was actually a song. Scoping the search to
+// this filter drops the top-result/album/artist/playlist cards server-side
+// so only the Songs shelf comes back, and its first (best-ranked) match is
+// an actual song video id for the query.
+const YTM_SEARCH_FILTER_SONGS = 'EgWKAQIIAWoMEA4QChADEAQQCRAF';
+
 async function searchVideoId(query) {
   // Try Pear Desktop search first. NOTE: 'params' must be a string or absent —
   // Pear's schema rejects null with HTTP 400, so never send params: null.
   try {
-    const result = await pearPost('/search', { query });
+    const result = await pearPost('/search', { query, params: YTM_SEARCH_FILTER_SONGS });
     if (result) {
       const str = JSON.stringify(result);
       // Match "videoId" only — generic "id" keys can be channel/playlist junk.
@@ -1119,8 +1137,7 @@ function buildLeft() {
 
   $('srConnectBtn').addEventListener('click', async () => {
     setPearStatus('wait', 'Connecting...');
-    const ok = await tryConnect();
-    if (!ok) setPearStatus('err', 'Cannot reach Pear Desktop. Is it running with API Server enabled (auth: None)?');
+    await tryConnect(); // sets its own 'err' status on failure now
   });
   $('srDisconnectBtn').addEventListener('click', () => {
     if (pollInterval)     { clearInterval(pollInterval);     pollInterval     = null; }

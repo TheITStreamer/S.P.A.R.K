@@ -49,7 +49,9 @@ html,body{background:transparent;overflow:hidden;font-family:'Segoe UI',system-u
   <div class="hdr">Song Queue <span class="hdr-count" id="hdrCount">0</span></div>
   <div id="list"></div>
 </div>
-<script>
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+
 const panel = document.getElementById('panel');
 const list  = document.getElementById('list');
 const hdrCount = document.getElementById('hdrCount');
@@ -77,25 +79,14 @@ function render(songs){
   panel.classList.add('visible');
 }
 
-let since = 0;
-async function poll(){
-  try{
-    const r = await fetch(`http://localhost:4747/events?since=${since}&tool=srqueue`);
-    if(!r.ok){ setTimeout(poll, 3000); return; }
-    const d = await r.json();
-    since = d.latest || since;
-    // Snapshot on first connect
-    if(since === 0 && d.snapshot && d.snapshot.type === 'srqueue'){
-      render(d.snapshot.songs || []);
-    }
-    for(const ev of (d.events || [])){
-      if(ev.type === 'srqueue')      render(ev.songs || []);
-      if(ev.type === 'srqueue_hide') panel.classList.remove('visible');
-    }
-  }catch(e){}
-  setTimeout(poll, 500);
-}
-poll();
+on('_snapshot', snap=>{
+  if(snap && snap.type === 'srqueue') render(snap.songs || []);
+});
+on('srqueue',      ev=>render(ev.songs || []));
+on('srqueue_hide', ()=>panel.classList.remove('visible'));
+
+setTool('srqueue');
+startPolling();
 </script>
 </body>
 </html>

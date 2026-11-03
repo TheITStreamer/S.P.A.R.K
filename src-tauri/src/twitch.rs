@@ -51,6 +51,8 @@ fn now_ms() -> u64 {
 }
 
 fn save_tokens_for(shared: &Shared, acct: Acct, tokens: Value) {
+    let which = match acct { Acct::Broadcaster => "twitch_tokens", Acct::Bot => "bot_tokens" };
+    crate::token_store::save(which, &tokens);
     let path = shared.data_path.lock().unwrap().clone();
     let mut d = shared.data.lock().unwrap();
     match acct {
@@ -272,12 +274,15 @@ fn store_identity(shared: &Shared, uid: &str, login: &str) {
 }
 
 fn store_identity_for(shared: &Shared, acct: Acct, uid: &str, login: &str) {
-    let path = shared.data_path.lock().unwrap().clone();
-    let mut d = shared.data.lock().unwrap();
-    let t = match acct { Acct::Broadcaster => &mut d.twitch_tokens, Acct::Bot => &mut d.bot_tokens };
-    t["user_id"] = json!(uid);
-    t["login"]   = json!(login);
-    crate::save_to_disk(&path, &d);
+    // Routes through save_tokens_for so the keychain copy picks up the cached
+    // identity too, same as every other field in this blob.
+    let mut tokens = {
+        let d = shared.data.lock().unwrap();
+        match acct { Acct::Broadcaster => d.twitch_tokens.clone(), Acct::Bot => d.bot_tokens.clone() }
+    };
+    tokens["user_id"] = json!(uid);
+    tokens["login"]   = json!(login);
+    save_tokens_for(shared, acct, tokens);
 }
 
 // Cached (user_id, login). Falls back to validate() once, then caches.
@@ -518,10 +523,7 @@ pub fn twitch_logout(shared: State<Shared>) {
     shared.twitch_stop.store(true, Ordering::SeqCst);
     shared.chat_stop.store(true, Ordering::SeqCst);
     shared.twitch_running.store(false, Ordering::SeqCst);
-    let path = shared.data_path.lock().unwrap().clone();
-    let mut d = shared.data.lock().unwrap();
-    d.twitch_tokens = serde_json::json!({});
-    crate::save_to_disk(&path, &d);
+    save_tokens_for(&shared, Acct::Broadcaster, json!({}));
 }
 
 #[tauri::command]

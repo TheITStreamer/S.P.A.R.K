@@ -392,9 +392,8 @@ function generalSettingsHtml(){
     <div class="row mt" style="gap:14px;flex-wrap:wrap">
       ${checkInput('crLoop', sc.loop, 'Loop when finished')}
       ${!horizontal ? checkInput('crFadeEdges', sc.fadeEdges, 'Fade top/bottom edges') : ''}
-      ${checkInput('crAutoplay', sc.autoplay, 'Auto-play when this overlay page loads')}
     </div>
-    <div class="hint">Auto-play fires the moment the overlay page loads. In OBS, enable "Shutdown source when not visible" on this Browser Source so switching to its scene reloads (and re-triggers) it.</div>
+    <div class="hint">This overlay plays automatically the moment its page loads — no separate toggle needed. In OBS, enable "Shutdown source when not visible" on this Browser Source so switching to its scene reloads (and re-triggers) it; otherwise it only plays once, the first time OBS opens the source.</div>
   </div>
   <div class="card">
     <h2>Layout &amp; Background</h2>
@@ -437,7 +436,6 @@ function wireGeneralSettings(){
   on('crBandHeight','input', e=>{ sc.bandHeight=parseInt(e.target.value)||140; markCustom(); persist(); });
   on('crLoop','change', e=>{ sc.loop=e.target.checked; persist(); });
   on('crFadeEdges','change', e=>{ sc.fadeEdges=e.target.checked; markCustom(); persist(); });
-  on('crAutoplay','change', e=>{ sc.autoplay=e.target.checked; persist(); });
   on('crFont','change', e=>{ l.font=e.target.value; markCustom(); persist(); });
   on('crAlign','change', e=>{ l.align=e.target.value; markCustom(); persist(); });
   on('crWidth','input', e=>{ l.width=parseInt(e.target.value)||640; markCustom(); persist(); });

@@ -210,11 +210,11 @@ function renderCurrentCat(){
   const el = $('bcCatCurrent'); if(!el) return;
   if(cur.gameName){
     el.innerHTML =
-        '<div style="font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:2px">Selected category</div>'
+        '<div style="font-size:.74rem;color:var(--muted);font-weight:600;margin-bottom:2px">Selected category</div>'
       + `<div style="font-size:1rem;font-weight:700;color:var(--ink);margin-bottom:8px">${esc(cur.gameName)}</div>`;
   } else {
     el.innerHTML =
-        '<div style="font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:2px">Selected category</div>'
+        '<div style="font-size:.74rem;color:var(--muted);font-weight:600;margin-bottom:2px">Selected category</div>'
       + '<div style="font-size:.95rem;font-weight:600;color:var(--accent);margin-bottom:8px">None set</div>';
   }
 }

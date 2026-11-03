@@ -95,7 +95,9 @@ html,body{width:100%;height:100%;background:transparent;overflow:hidden;font-fam
 <body>
 <div id="outer" class="np-outer gone"></div>
 
-<script>
+<script type="module">
+import { setTool, on, startPolling } from '/js/overlay-common.js';
+
 const outer = document.getElementById('outer');
 let curStyle='', curTitle='', curThumb='', curRequester='', curNoShadow=false, curSeekCol='';
 let interpTimer=null;
@@ -250,26 +252,16 @@ function hide(){
   if(interpTimer){ clearInterval(interpTimer); interpTimer = null; }
 }
 
-let since = 0;
-async function poll(){
-  try{
-    const r = await fetch(`http://localhost:4747/events?since=${since}&tool=nowplaying`);
-    if(!r.ok){ setTimeout(poll, 3000); return; }
-    const d = await r.json();
-    since = d.latest || since;
-    for(const ev of (d.events || [])){
-      if(ev.type==='nowplaying') update(ev);
-      if(ev.type==='nowplaying_progress'){
-        lastProgress = ev.progress || 0; lastDuration = ev.duration || 1; lastPollMs = Date.now();
-        isPlaying = !!ev.isPlaying;
-        updateFill(ev.progress, ev.duration);
-      }
-      if(ev.type==='nowplaying_stop') hide();
-    }
-  }catch(e){}
-  setTimeout(poll, 100);
-}
-poll();
+on('nowplaying', ev=>update(ev));
+on('nowplaying_progress', ev=>{
+  lastProgress = ev.progress || 0; lastDuration = ev.duration || 1; lastPollMs = Date.now();
+  isPlaying = !!ev.isPlaying;
+  updateFill(ev.progress, ev.duration);
+});
+on('nowplaying_stop', ()=>hide());
+
+setTool('nowplaying');
+startPolling();
 </script>
 </body>
 </html>

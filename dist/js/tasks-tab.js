@@ -145,7 +145,7 @@ function clearAllTasks(){
 // Build a section block for a group of tasks
 function sectionHtml(label, userTasks, isHost){
   const headerStyle = isHost
-    ? 'color:var(--gold);font-weight:700;font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;padding:6px 0 4px'
+    ? 'color:var(--gold-ink);font-weight:600;font-size:.84rem;padding:6px 0 4px'
     : 'color:var(--muted);font-weight:600;font-size:.8rem;padding:6px 0 4px;border-top:1px solid var(--row-line);margin-top:4px';
   return `<div>
     <div style="${headerStyle}">${esc(label)}</div>
@@ -217,7 +217,7 @@ function updateRightPreview(){
 
   let html='';
   if(hostTasks.length){
-    html+=`<div style="color:#ffc83d;font-size:.7rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;padding:4px 0 2px">${esc(hostLabel())}</div>`;
+    html+=`<div style="color:var(--gold-ink);font-size:.76rem;font-weight:600;padding:4px 0 2px">${esc(hostLabel())}</div>`;
     html+=hostTasks.map(t=>`<div class="tk-prev-row${t.done?' tk-prev-done':''}"><span class="tk-prev-num">${t.num}</span><span class="tk-prev-text">${esc(t.text)}</span></div>`).join('');
     // Separator — only shown when host has tasks AND there's a viewer section to separate from
     if(!cfg.overlay.separateBoxes && order.length){

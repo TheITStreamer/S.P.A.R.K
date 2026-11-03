@@ -218,7 +218,9 @@ function wireListEvents(){
 // ── Editor modal ─────────────────────────────────────────────────────────────
 function fieldColor(id, val){ return `<input type="color" id="${id}" value="${val}" style="width:50px;height:32px;border:none;background:none;cursor:pointer">`; }
 
+let closeCounterEditor = null;
 function openEditor(c){
+  if(closeCounterEditor) closeCounterEditor();
   document.getElementById('cntEditorModal')?.remove();
   const modal = document.createElement('div');
   modal.id = 'cntEditorModal';
@@ -232,7 +234,7 @@ function openEditor(c){
 
   modal.innerHTML = `<div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;width:600px;max-height:90vh;overflow-y:auto;position:relative">
     <button id="cntEdClose" style="position:absolute;top:12px;right:14px;background:none;border:none;color:var(--muted);font-size:1.5rem;cursor:pointer">x</button>
-    <div style="font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:16px">Editing: ${esc(c.name)}</div>
+    <div style="font-size:.82rem;color:var(--muted);font-weight:600;margin-bottom:16px">Editing: ${esc(c.name)}</div>
 
     <label>Name</label><input type="text" id="cntEdName" value="${esc(c.name)}">
 
@@ -333,11 +335,20 @@ function openEditor(c){
       c.style.padding       = parseInt($('cntEdPad').value) || 0;
     }
 
-    modal.remove(); renderList(); persist(); pushOverlay();
+    close(); renderList(); persist(); pushOverlay();
   });
-  $('cntEdClose').addEventListener('click', ()=>modal.remove());
-  $('cntEdCancel').addEventListener('click', ()=>modal.remove());
-  modal.addEventListener('click', e=>{ if(e.target===modal) modal.remove(); });
+  $('cntEdClose').addEventListener('click', close);
+  $('cntEdCancel').addEventListener('click', close);
+  modal.addEventListener('click', e=>{ if(e.target===modal) close(); });
+
+  function close(){
+    document.removeEventListener('keydown', onEsc);
+    modal.remove();
+    if(closeCounterEditor===close) closeCounterEditor=null;
+  }
+  function onEsc(e){ if(e.key==='Escape') close(); }
+  document.addEventListener('keydown', onEsc);
+  closeCounterEditor = close;
 }
 
 // ── Layout controls ────────────────────────────────────────────────────────

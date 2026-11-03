@@ -73,7 +73,11 @@ export function defaultCfg(){
     scroll: {
       direction:'up', speed:50, loop:false, fadeEdges:true, gap:10, sectionGap:56,
       dock:'bottom', bandHeight:140, // only used when direction is left/right
-      autoplay:false, // auto-run once when the overlay page first loads (e.g. OBS scene switch)
+      // Always runs once when the overlay page first loads (e.g. OBS scene
+      // switch reloading the Browser Source) — see credits.html. There used
+      // to be a checkbox for this; it was an easy-to-miss point of failure
+      // (an off-by-default toggle standing between "switch to the scene" and
+      // "anything actually happens"), so the behavior is unconditional now.
     },
     layout: {
       font:'Segoe UI', width:640, align:'center',

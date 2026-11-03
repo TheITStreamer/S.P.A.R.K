@@ -162,7 +162,7 @@ function configCardHtml(cfg){
     </div>
     <div class="hint">${cfg.anyRedeem?'Any redeem triggers check-in':'Reward: '+(cfg._rewardTitle||cfg.rewardId||'not set')}</div>
     <div class="hint">Text: <em>${esc(cfg.text||'{name} has checked in {count} times!')}</em></div>
-    <div style="margin-top:10px;font-size:.75rem;color:var(--muted);font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Check-in counts</div>
+    <div style="margin-top:10px;font-size:.78rem;color:var(--muted);font-weight:600;margin-bottom:6px">Check-in counts</div>
     <div id="ci-counts-${cfg.id}"><div class="hint">No check-ins yet.</div></div>
   </div>`;
 }
@@ -317,8 +317,10 @@ async function loadRewardsIntoSelects(){
 }
 
 // ── Config editor modal ───────────────────────────────────────────────────────
+let closeCheckinEditor = null;
 function openEditor(cfg){
   try{
+    if(closeCheckinEditor) closeCheckinEditor();
     document.getElementById('ciEditorModal')?.remove();
     const modal=document.createElement('div');
     modal.id='ciEditorModal';
@@ -327,7 +329,7 @@ function openEditor(cfg){
     const sfxLabel = cfg.sfx ? cfg.sfx.split(/[\\/]/).pop() : 'No file';
     modal.innerHTML='<div style="background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;width:520px;max-height:90vh;overflow-y:auto;position:relative">'
       +'<button id="ciEdClose" style="position:absolute;top:12px;right:14px;background:none;border:none;color:var(--muted);font-size:1.5rem;cursor:pointer">x</button>'
-      +'<div style="font-size:.7rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:16px">Editing: '+esc(cfg.name||'')+'</div>'
+      +'<div style="font-size:.82rem;color:var(--muted);font-weight:600;margin-bottom:16px">Editing: '+esc(cfg.name||'')+'</div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'
         +'<div><label>Name</label><input id="ciEdName" type="text" value="'+esc(cfg.name||'')+'"></div>'
         +'<div><label>Trigger reward</label><select id="ciEdReward"><option value="'+esc(cfg.rewardId||'')+'">'+esc(cfg._rewardTitle||cfg.rewardId||'Loading...')+'</option></select></div>'
@@ -401,11 +403,20 @@ function openEditor(cfg){
       cfg.height     = parseInt(document.getElementById('ciEdH').value)||90;
       cfg.duration   = parseInt(document.getElementById('ciEdDur').value)||5;
       cfg.sfx        = sfxPath;
-      modal.remove(); renderConfigList(); persist();
+      close(); renderConfigList(); persist();
     });
-    document.getElementById('ciEdClose').addEventListener('click',()=>modal.remove());
-    document.getElementById('ciEdCancel').addEventListener('click',()=>modal.remove());
-    modal.addEventListener('click',e=>{ if(e.target===modal) modal.remove(); });
+    document.getElementById('ciEdClose').addEventListener('click',close);
+    document.getElementById('ciEdCancel').addEventListener('click',close);
+    modal.addEventListener('click',e=>{ if(e.target===modal) close(); });
+
+    function close(){
+      document.removeEventListener('keydown', onEsc);
+      modal.remove();
+      if(closeCheckinEditor===close) closeCheckinEditor=null;
+    }
+    function onEsc(e){ if(e.key==='Escape') close(); }
+    document.addEventListener('keydown', onEsc);
+    closeCheckinEditor = close;
   }catch(err){ console.error('openEditor error:',err); }
 }
 
